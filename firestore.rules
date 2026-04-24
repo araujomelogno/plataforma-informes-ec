@@ -1,0 +1,39 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Función auxiliar: verifica si el usuario autenticado es admin
+    function isAdmin() {
+      return request.auth != null &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // Función auxiliar: usuario autenticado
+    function isAuth() {
+      return request.auth != null;
+    }
+
+    // ── Colección: users ──
+    // Cada usuario puede leer su propio doc. El admin puede leer y escribir todos.
+    match /users/{uid} {
+      allow read:  if isAuth() && (request.auth.uid == uid || isAdmin());
+      allow write: if isAuth() && (request.auth.uid == uid || isAdmin());
+    }
+
+    // ── Colección: reports (metadata de los HTMLs) ──
+    // Todos los usuarios autenticados pueden leer (para mostrar nombre/fecha).
+    // Solo el admin puede crear/modificar/eliminar.
+    match /reports/{reportId} {
+      allow read:  if isAuth();
+      allow write: if isAdmin();
+    }
+
+    // ── Colección: userAccess ──
+    // Cada usuario puede leer sus propios permisos.
+    // Solo el admin puede escribir (asignar/quitar acceso).
+    match /userAccess/{uid} {
+      allow read:  if isAuth() && (request.auth.uid == uid || isAdmin());
+      allow write: if isAdmin();
+    }
+  }
+}
