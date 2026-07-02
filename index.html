@@ -558,6 +558,9 @@
       <button class="nav-item" id="nav-permissions" onclick="switchTab('permissions', this)">
         <span class="nav-icon">🔐</span> Permisos
       </button>
+      <button class="nav-item" id="nav-metrics" onclick="switchTab('metrics', this)">
+        <span class="nav-icon">📊</span> Métricas
+      </button>
 
       <div class="sidebar-footer">
         <div class="user-pill">
@@ -669,6 +672,25 @@
         </div>
       </div>
 
+      <div id="tab-metrics" class="hidden">
+        <div class="page-header">
+          <div class="accent-bar"></div>
+          <h2>Métricas de <span class="accent">Acceso</span></h2>
+          <p>Quién ingresa, cuántas veces, por cuánto tiempo y desde qué IP</p>
+        </div>
+        <div class="card">
+          <div class="card-header"><span class="card-header-title">Resumen por usuario</span></div>
+          <div id="metrics-summary"><div class="loading">Cargando métricas...</div></div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <span class="card-header-title">Sesiones recientes</span>
+            <button class="btn btn-outline btn-sm" onclick="loadMetrics()">↻ Actualizar</button>
+          </div>
+          <div id="metrics-sessions"></div>
+        </div>
+      </div>
+
     </div>
   </div>
 </template>
@@ -729,6 +751,7 @@ const storage = firebase.storage();
 let currentUser = null, currentUserData = null;
 let allReports = [], allUsers = [];
 let myAccessOptions = {};   // opciones de protección del usuario actual: { reportId: {watermark,noPrint,...} }
+let currentSessionId = null, _hbTimer = null, _sessionStarting = false;   // métricas de acceso
 
 /* ── AUTH ── */
 auth.onAuthStateChanged(async (user) => {
@@ -745,7 +768,9 @@ auth.onAuthStateChanged(async (user) => {
       });
     }
     currentUserData.role === 'admin' ? renderAdmin() : renderUser();
+    startSession();   // registra el acceso (una vez por carga autenticada)
   } else {
+    stopHeartbeat(); currentSessionId = null;
     currentUser = null; currentUserData = null;
     renderLogin();
   }
@@ -760,7 +785,7 @@ async function doLogin() {
     showAlert('login-alert', 'error', '❌ Email o contraseña incorrectos');
   }
 }
-function doLogout() { auth.signOut(); }
+async function doLogout() { await endSession(); auth.signOut(); }
 
 /* ── RENDER ── */
 function renderLogin() {
@@ -787,11 +812,12 @@ async function renderUser() {
 
 /* ── TABS ── */
 function switchTab(tab, btn) {
-  ['reports','users','permissions'].forEach(t =>
+  ['reports','users','permissions','metrics'].forEach(t =>
     el('tab-'+t).classList.toggle('hidden', t !== tab));
   document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   if (tab === 'permissions') populatePermSelect();
+  if (tab === 'metrics') loadMetrics();
 }
 
 /* ── REPORTS ── */
@@ -1355,6 +1381,137 @@ function renderErrorHTML(err, url, opts) {
     </p>
     ${dl}
   </div>`;
+}
+
+/* ══════════════════════════════════════
+   MÉTRICAS DE ACCESO (sesiones)
+   Cada acceso autenticado crea un doc en la colección `sessions`.
+   La duración se estima con un "latido" (lastSeenAt) + cierre al salir.
+   La IP se obtiene de un servicio público (api.ipify.org).
+══════════════════════════════════════ */
+async function startSession() {
+  if (currentSessionId || _sessionStarting || !currentUser) return;
+  _sessionStarting = true;
+  let ip = null;
+  try { ip = (await (await fetch('https://api.ipify.org?format=json')).json()).ip; } catch (e) {}
+  try {
+    const ref = await db.collection('sessions').add({
+      uid: currentUser.uid,
+      email: currentUser.email,
+      role: (currentUserData && currentUserData.role) || 'user',
+      ip: ip,
+      userAgent: navigator.userAgent,
+      startAt: firebase.firestore.FieldValue.serverTimestamp(),
+      lastSeenAt: firebase.firestore.FieldValue.serverTimestamp(),
+      endAt: null,
+      ended: false
+    });
+    currentSessionId = ref.id;
+    startHeartbeat();
+  } catch (e) { console.warn('No se pudo registrar la sesión:', e && e.message); }
+  finally { _sessionStarting = false; }
+}
+function startHeartbeat() { stopHeartbeat(); _hbTimer = setInterval(touchSession, 60000); }
+function stopHeartbeat() { if (_hbTimer) { clearInterval(_hbTimer); _hbTimer = null; } }
+function touchSession() {
+  if (!currentSessionId || document.visibilityState !== 'visible') return;
+  db.collection('sessions').doc(currentSessionId)
+    .update({ lastSeenAt: firebase.firestore.FieldValue.serverTimestamp() }).catch(() => {});
+}
+async function endSession() {
+  stopHeartbeat();
+  const id = currentSessionId;
+  currentSessionId = null;
+  if (!id) return;
+  try {
+    await db.collection('sessions').doc(id).update({
+      endAt: firebase.firestore.FieldValue.serverTimestamp(),
+      lastSeenAt: firebase.firestore.FieldValue.serverTimestamp(),
+      ended: true
+    });
+  } catch (e) {}
+}
+// Al ocultar/cerrar la pestaña registramos el último "visto" (best-effort).
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') touchSession();
+});
+
+async function loadMetrics() {
+  const sumEl = el('metrics-summary'), sesEl = el('metrics-sessions');
+  if (!sumEl) return;
+  sumEl.innerHTML = '<div class="loading">Cargando métricas...</div>';
+  if (sesEl) sesEl.innerHTML = '';
+  let sessions = [];
+  try {
+    const snap = await db.collection('sessions').orderBy('startAt', 'desc').limit(500).get();
+    sessions = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  } catch (e) {
+    sumEl.innerHTML = emptyHTML('⚠️', 'No se pudieron cargar las métricas.<br>¿Publicaste las reglas de Firestore para <b>sessions</b>?');
+    return;
+  }
+  if (!sessions.length) { sumEl.innerHTML = emptyHTML('📊', 'Todavía no hay accesos registrados.'); return; }
+
+  const byUser = {};
+  sessions.forEach(s => {
+    const k = s.email || s.uid;
+    if (!byUser[k]) byUser[k] = { email: k, count: 0, total: 0, last: 0, lastIp: '—' };
+    byUser[k].count++;
+    byUser[k].total += sessionDuration(s);
+    const st = tsMs(s.startAt);
+    if (st && st > byUser[k].last) { byUser[k].last = st; byUser[k].lastIp = s.ip || '—'; }
+  });
+  const rows = Object.values(byUser).sort((a, b) => b.last - a.last);
+  sumEl.innerHTML = `<div style="overflow-x:auto"><table>
+    <thead><tr><th>Usuario</th><th>Accesos</th><th>Tiempo total</th><th>Último acceso</th><th>Última IP</th></tr></thead>
+    <tbody>${rows.map(u => `<tr>
+      <td style="font-weight:600">${esc(u.email)}</td>
+      <td>${u.count}</td>
+      <td>${fmtDur(u.total)}</td>
+      <td style="color:var(--gray)">${u.last ? fmtDateTime(u.last) : '—'}</td>
+      <td style="color:var(--gray)">${esc(u.lastIp)}</td>
+    </tr>`).join('')}</tbody></table></div>`;
+
+  if (sesEl) sesEl.innerHTML = `<div style="overflow-x:auto"><table>
+    <thead><tr><th>Usuario</th><th>Inicio</th><th>Duración</th><th>IP</th><th>Dispositivo</th></tr></thead>
+    <tbody>${sessions.slice(0, 200).map(s => `<tr>
+      <td style="font-weight:600">${esc(s.email || s.uid)}</td>
+      <td style="color:var(--gray)">${fmtDateTime(tsMs(s.startAt))}</td>
+      <td>${s.ended ? fmtDur(sessionDuration(s)) : '<span style="color:var(--orange);font-weight:600">en curso</span>'}</td>
+      <td style="color:var(--gray)">${esc(s.ip || '—')}</td>
+      <td style="color:var(--gray);font-size:.72rem">${esc(shortUA(s.userAgent))}</td>
+    </tr>`).join('')}</tbody></table></div>`;
+}
+function tsMs(ts) { return ts && ts.toDate ? ts.toDate().getTime() : (ts ? new Date(ts).getTime() : 0); }
+function sessionDuration(s) {
+  const a = tsMs(s.startAt), b = tsMs(s.endAt) || tsMs(s.lastSeenAt);
+  return (a && b && b > a) ? (b - a) : 0;
+}
+function fmtDur(ms) {
+  if (!ms) return '—';
+  const sec = Math.round(ms / 1000);
+  if (sec < 60) return sec + 's';
+  const m = Math.floor(sec / 60), s = sec % 60;
+  if (m < 60) return m + 'm ' + s + 's';
+  const h = Math.floor(m / 60), mm = m % 60;
+  return h + 'h ' + mm + 'm';
+}
+function fmtDateTime(ms) {
+  if (!ms) return '—';
+  const d = new Date(ms);
+  return d.toLocaleDateString('es-UY', { day:'2-digit', month:'2-digit', year:'numeric' }) + ' ' +
+         d.toLocaleTimeString('es-UY', { hour:'2-digit', minute:'2-digit' });
+}
+function shortUA(ua) {
+  if (!ua) return '—';
+  let b = 'Navegador';
+  if (/Edg/.test(ua)) b = 'Edge'; else if (/OPR|Opera/.test(ua)) b = 'Opera';
+  else if (/Chrome/.test(ua)) b = 'Chrome'; else if (/Firefox/.test(ua)) b = 'Firefox';
+  else if (/Safari/.test(ua)) b = 'Safari';
+  let os = '';
+  if (/Windows/.test(ua)) os = 'Windows'; else if (/Android/.test(ua)) os = 'Android';
+  else if (/iPhone|iPad|iPod/.test(ua)) os = 'iOS'; else if (/Mac OS/.test(ua)) os = 'macOS';
+  else if (/Linux/.test(ua)) os = 'Linux';
+  return os ? (b + ' · ' + os) : b;
 }
 
 /* ── HELPERS ── */
