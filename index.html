@@ -294,20 +294,36 @@
       gap: 0.75rem; margin-top: 1rem;
     }
     .perm-item {
-      display: flex; align-items: center; gap: 0.65rem;
+      display: flex; flex-direction: column; align-items: stretch; gap: 0.55rem;
       padding: 0.85rem 1rem; border: 1.5px solid var(--border);
-      border-radius: 3px; cursor: pointer; transition: all 0.18s;
-      user-select: none;
+      border-radius: 3px; transition: all 0.18s;
     }
-    .perm-item:hover { border-color: var(--orange); background: var(--orange-light); }
     .perm-item.granted { border-color: var(--orange); background: var(--orange-light); }
-    .perm-item input[type=checkbox] {
+    .perm-head {
+      display: flex; align-items: center; gap: 0.65rem;
+      cursor: pointer; user-select: none;
+    }
+    .perm-head input[type=checkbox] {
       width: 16px; height: 16px; accent-color: var(--orange);
       flex-shrink: 0; cursor: pointer;
     }
     .perm-item .perm-label {
       font-size: 0.82rem; font-weight: 600; color: var(--dark);
       cursor: pointer; word-break: break-word;
+    }
+    .perm-opts {
+      display: grid; gap: 0.35rem; padding: 0.55rem 0 0.15rem 1.65rem;
+      border-top: 1px dashed var(--border);
+    }
+    .perm-opts.disabled { display: none; }
+    .perm-opt {
+      display: flex; align-items: center; gap: 0.45rem;
+      font-size: 0.72rem; font-weight: 600; color: var(--gray);
+      cursor: pointer; user-select: none;
+    }
+    .perm-opt input[type=checkbox] {
+      width: 14px; height: 14px; accent-color: var(--orange);
+      flex-shrink: 0; cursor: pointer;
     }
 
     /* ══════════════════════════════════════
@@ -325,7 +341,31 @@
       font-size: 0.85rem; font-weight: 600; color: var(--white);
       flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
-    .viewer-iframe { flex: 1; border: none; width: 100%; background: white; }
+    .viewer-bar { position: relative; z-index: 3; }
+    .viewer-content {
+      flex: 1; overflow: auto; position: relative;
+      background: var(--gray-xlight);
+    }
+    .viewer-frame { border: none; width: 100%; height: 100%; background: #fff; display: block; }
+    /* Marca de agua: mosaico diagonal fijo sobre el contenido, no intercepta clics */
+    .wm-overlay { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+    /* Bloqueo de selección / clic derecho */
+    .viewer.no-copy .viewer-content { user-select: none; -webkit-user-select: none; }
+    /* Render de PDF (canvas por página) */
+    .pdf-pages { display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 18px; }
+    .pdf-page { max-width: 100%; height: auto; box-shadow: 0 2px 14px rgba(0,0,0,0.18); background: #fff; }
+    /* Render de Word / PowerPoint */
+    .docx-wrap { background: #fff; margin: 18px auto; max-width: 100%; box-shadow: 0 2px 14px rgba(0,0,0,0.12); }
+    .pptx-wrap { padding: 14px; max-width: 100%; }
+    /* Bloqueo de impresión: si está activo, la impresión sale en blanco */
+    @media print {
+      body.no-print-active * { visibility: hidden !important; }
+      body.no-print-active::before {
+        content: "🔒 La impresión de este documento está deshabilitada.";
+        visibility: visible; position: fixed; top: 45%; left: 0; right: 0;
+        text-align: center; font-size: 20px; color: #333; font-family: sans-serif;
+      }
+    }
 
     /* ══════════════════════════════════════
        REPORT CARDS (user view)
@@ -688,6 +728,7 @@ const storage = firebase.storage();
 
 let currentUser = null, currentUserData = null;
 let allReports = [], allUsers = [];
+let myAccessOptions = {};   // opciones de protección del usuario actual: { reportId: {watermark,noPrint,...} }
 
 /* ── AUTH ── */
 auth.onAuthStateChanged(async (user) => {
@@ -889,8 +930,14 @@ async function deleteReport(id, storagePath) {
   const batch = db.batch();
   snap.docs.forEach(d => {
     const data = d.data();
-    if (data.reportIds?.includes(id))
-      batch.update(d.ref, { reportIds: data.reportIds.filter(r => r !== id) });
+    const hasAccess = data.reportIds?.includes(id);
+    const hasOpts   = data.options && Object.prototype.hasOwnProperty.call(data.options, id);
+    if (hasAccess || hasOpts) {
+      const upd = {};
+      if (hasAccess) upd.reportIds = data.reportIds.filter(r => r !== id);
+      if (hasOpts)   upd['options.' + id] = firebase.firestore.FieldValue.delete();
+      batch.update(d.ref, upd);
+    }
   });
   await batch.commit();
   await loadReports(); renderReportsTable();
@@ -900,13 +947,12 @@ async function previewReport(storagePath, name) {
   showLoadingOverlay(name);
   try {
     const url = await storage.ref(storagePath).getDownloadURL();
-    openViewer(url, name);
-    const iframe = document.querySelector('.viewer-iframe');
-    if (iframe) iframe.addEventListener('load', hideLoadingOverlay, { once: true });
-    setTimeout(hideLoadingOverlay, 8000);
+    // Vista previa del admin: sin restricciones (ve el documento tal cual).
+    await openViewer(url, name, { watermark: false, noPrint: false, noDownload: false, noCopy: false }, currentUser && currentUser.email);
   } catch (err) {
-    hideLoadingOverlay();
     alert('Error al cargar el informe: ' + (err.message || err));
+  } finally {
+    hideLoadingOverlay();
   }
 }
 
@@ -994,51 +1040,91 @@ async function loadUserPermissions() {
   }
   cont.innerHTML = '<div class="loading">Cargando permisos...</div>';
   const snap = await db.collection('userAccess').doc(userId).get();
-  const granted = snap.exists ? (snap.data().reportIds || []) : [];
+  const data = snap.exists ? snap.data() : {};
+  const granted = data.reportIds || [];
+  const optsMap = data.options || {};
   if (!allReports.length) {
     cont.innerHTML = emptyHTML('📭', 'No hay informes disponibles para asignar');
     return;
   }
   cont.innerHTML = `
     <p style="font-size:0.8rem;color:var(--gray);font-weight:500">
-      Marcá los informes a los que puede acceder este usuario.<br>
+      Marcá los informes a los que puede acceder este usuario y configurá las protecciones de cada uno.<br>
       Los cambios se guardan automáticamente.
     </p>
     <div class="perm-grid">
-      ${allReports.map(r => `
-      <div class="perm-item ${granted.includes(r.id)?'granted':''}" onclick="togglePerm('${userId}','${r.id}',this)">
-        <input type="checkbox" ${granted.includes(r.id)?'checked':''} onclick="event.stopPropagation();togglePerm('${userId}','${r.id}',this.closest('.perm-item'))" />
-        <span class="perm-label">📄 ${esc(r.name)}</span>
-      </div>`).join('')}
+      ${allReports.map(r => {
+        const on = granted.includes(r.id);
+        const o  = mergeOpts(optsMap[r.id]);
+        return `
+      <div class="perm-item ${on?'granted':''}" id="perm-${r.id}">
+        <label class="perm-head">
+          <input type="checkbox" ${on?'checked':''} onchange="togglePerm('${userId}','${r.id}',this)" />
+          <span class="perm-label">${fileIcon(r.name)} ${esc(r.name)}</span>
+        </label>
+        <div class="perm-opts ${on?'':'disabled'}">
+          ${OPT_DEFS.map(d => `
+          <label class="perm-opt">
+            <input type="checkbox" data-optkey="${d.key}" ${o[d.key]?'checked':''} ${on?'':'disabled'}
+                   onchange="toggleOpt('${userId}','${r.id}','${d.key}',this.checked)" />
+            <span>${d.icon} ${d.label}</span>
+          </label>`).join('')}
+        </div>
+      </div>`;
+      }).join('')}
     </div>`;
 }
 
-async function togglePerm(userId, reportId, item) {
+async function togglePerm(userId, reportId, cb) {
+  const on = cb.checked;
   const snap = await db.collection('userAccess').doc(userId).get();
-  let ids = snap.exists ? (snap.data().reportIds || []) : [];
-  const idx = ids.indexOf(reportId);
-  const cb  = item.querySelector('input');
-  if (idx === -1) { ids.push(reportId); item.classList.add('granted'); cb.checked = true; }
-  else            { ids.splice(idx,1); item.classList.remove('granted'); cb.checked = false; }
-  await db.collection('userAccess').doc(userId).set({ reportIds: ids }, { merge: true });
+  const data = snap.exists ? snap.data() : {};
+  let ids = data.reportIds || [];
+  const options = data.options || {};
+  if (on) {
+    if (!ids.includes(reportId)) ids.push(reportId);
+    if (!options[reportId]) options[reportId] = Object.assign({}, DEFAULT_OPTS);
+  } else {
+    ids = ids.filter(x => x !== reportId);
+  }
+  await db.collection('userAccess').doc(userId).set({ reportIds: ids, options }, { merge: true });
+  // Reflejar en la UI: activar/desactivar los toggles de protección
+  const item = el('perm-' + reportId);
+  if (item) {
+    item.classList.toggle('granted', on);
+    const box = item.querySelector('.perm-opts');
+    box.classList.toggle('disabled', !on);
+    const o = mergeOpts(options[reportId]);
+    box.querySelectorAll('input[data-optkey]').forEach(i => {
+      i.disabled = !on;
+      if (on) i.checked = !!o[i.dataset.optkey];
+    });
+  }
+}
+
+async function toggleOpt(userId, reportId, key, val) {
+  await db.collection('userAccess').doc(userId)
+    .set({ options: { [reportId]: { [key]: val } } }, { merge: true });
 }
 
 /* ── USER VIEW ── */
 async function loadUserReports() {
   const cont = el('user-reports-container');
   const accessSnap = await db.collection('userAccess').doc(currentUser.uid).get();
-  if (!accessSnap.exists || !accessSnap.data().reportIds?.length) {
+  const data = accessSnap.exists ? accessSnap.data() : {};
+  const ids = data.reportIds || [];
+  myAccessOptions = data.options || {};
+  if (!ids.length) {
     cont.innerHTML = emptyHTML('📭', 'No tenés informes asignados aún.<br>Contactá al administrador.');
     return;
   }
-  const ids = accessSnap.data().reportIds;
   const reports = await Promise.all(
     ids.map(async id => { const d = await db.collection('reports').doc(id).get(); return d.exists ? {id,...d.data()} : null; })
   ).then(rs => rs.filter(Boolean));
   if (!reports.length) { cont.innerHTML = emptyHTML('📭', 'No hay informes disponibles.'); return; }
   cont.innerHTML = `<div class="report-grid">
     ${reports.map(r => `
-    <div class="report-card" onclick="openUserReport('${r.storagePath}','${esc(r.name)}')">
+    <div class="report-card" onclick="openUserReport('${r.storagePath}','${esc(r.name)}','${r.id}')">
       <div class="report-card-icon">${fileIcon(r.name)}</div>
       <h3>${esc(r.name)}</h3>
       <div class="meta">${fmtSize(r.size)} · ${fmtDate(r.createdAt)}</div>
@@ -1046,17 +1132,16 @@ async function loadUserReports() {
   </div>`;
 }
 
-async function openUserReport(storagePath, name) {
+async function openUserReport(storagePath, name, reportId) {
   showLoadingOverlay(name);
   try {
     const url = await storage.ref(storagePath).getDownloadURL();
-    openViewer(url, name);
-    const iframe = document.querySelector('.viewer-iframe');
-    if (iframe) iframe.addEventListener('load', hideLoadingOverlay, { once: true });
-    setTimeout(hideLoadingOverlay, 8000);
+    const opts = mergeOpts(myAccessOptions[reportId]);
+    await openViewer(url, name, opts, currentUser && currentUser.email);
   } catch (err) {
-    hideLoadingOverlay();
     alert('Error al cargar el informe: ' + (err.message || err));
+  } finally {
+    hideLoadingOverlay();
   }
 }
 
@@ -1100,35 +1185,170 @@ function hideLoadingOverlay() {
   setTimeout(() => ov.remove(), 250);
 }
 
-/* ── VIEWER ── */
-function openViewer(url, name) {
+/* ══════════════════════════════════════
+   VISOR — renderizado en el navegador (Opción A)
+   Renderiza el documento dentro de la propia página para poder
+   aplicar protecciones (marca de agua, bloqueo de impresión/descarga/copia).
+   PDF → PDF.js · DOCX → docx-preview · PPTX → PPTXjs · HTML → iframe.
+   Requiere CORS configurado en el bucket para leer los bytes (ver cors.json / README).
+══════════════════════════════════════ */
+let _viewerCleanup = null;
+
+async function openViewer(url, name, opts, viewerEmail) {
+  opts = mergeOpts(opts);
+  const ext = extOf(name);
   const kind = fileKind(name);
-  let iframe;
-  if (kind === 'office') {
-    // Los navegadores no renderizan Word/PowerPoint: usamos el visor web de Microsoft Office.
-    // Necesita que la URL de descarga de Firebase (con token) sea accesible públicamente.
-    const src = 'https://view.officeapps.live.com/op/embed.aspx?src=' + encodeURIComponent(url);
-    iframe = `<iframe class="viewer-iframe" src="${src}"></iframe>`;
-  } else if (kind === 'pdf') {
-    // El PDF se renderiza nativamente en el iframe (sin sandbox para no bloquear el visor del navegador).
-    iframe = `<iframe class="viewer-iframe" src="${url}"></iframe>`;
-  } else {
-    // HTML subido por el admin: se mantiene el sandbox por seguridad.
-    iframe = `<iframe class="viewer-iframe" src="${url}" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>`;
-  }
-  const linkLabel = kind === 'office' ? '⬇ Descargar' : '↗ Nueva pestaña';
+
   const vw = document.createElement('div');
-  vw.className = 'viewer'; vw.id = 'viewer';
+  vw.className = 'viewer' + (opts.noCopy ? ' no-copy' : '');
+  vw.id = 'viewer';
+  if (opts.noCopy) { vw.oncontextmenu = () => false; vw.ondragstart = () => false; }
+
+  const dlLink = opts.noDownload ? '' :
+    `<a href="${url}" target="_blank" rel="noopener" class="btn btn-outline-dark btn-sm">↗ Abrir / Descargar</a>`;
+
   vw.innerHTML = `
     <div class="viewer-bar">
       <button class="btn btn-outline-dark btn-sm" onclick="closeViewer()">← Volver</button>
       <div class="viewer-title">${fileIcon(name)} ${esc(name)}</div>
-      <a href="${url}" target="_blank" rel="noopener" class="btn btn-outline-dark btn-sm">${linkLabel}</a>
+      ${dlLink}
     </div>
-    ${iframe}`;
+    <div class="viewer-content" id="viewer-content">
+      <div class="loading" style="padding:2.5rem;text-align:center">Preparando vista…</div>
+    </div>`;
   document.body.appendChild(vw);
+
+  setupProtections(vw, opts, viewerEmail);
+  const content = vw.querySelector('#viewer-content');
+
+  try {
+    if (kind === 'html') {
+      content.innerHTML = `<iframe class="viewer-frame" src="${url}" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>`;
+    } else if (ext === 'pdf') {
+      await renderPdf(url, content);
+    } else if (ext === 'docx') {
+      await renderDocx(url, content);
+    } else if (ext === 'pptx') {
+      await renderPptx(url, content);
+    } else {
+      content.innerHTML = legacyFallback(name, url, opts);  // .doc / .ppt antiguos
+    }
+  } catch (err) {
+    console.error('Error al renderizar el documento:', err);
+    content.innerHTML = renderErrorHTML(err, url, opts);
+  }
 }
-function closeViewer() { const v = document.getElementById('viewer'); if(v) v.remove(); }
+
+function closeViewer() {
+  teardownProtections();
+  const v = document.getElementById('viewer');
+  if (v) v.remove();
+}
+
+/* ── Protecciones (marca de agua, impresión, copia) ── */
+function setupProtections(vw, opts, email) {
+  teardownProtections();
+  if (opts.watermark) addWatermark(vw, email);
+  if (opts.noPrint) {
+    document.body.classList.add('no-print-active');
+    window.addEventListener('keydown', blockPrintKey, true);
+  }
+  _viewerCleanup = () => {
+    document.body.classList.remove('no-print-active');
+    window.removeEventListener('keydown', blockPrintKey, true);
+  };
+}
+function teardownProtections() { if (_viewerCleanup) { _viewerCleanup(); _viewerCleanup = null; } }
+function blockPrintKey(e) {
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'p' || e.key === 'P')) {
+    e.preventDefault(); e.stopPropagation(); return false;
+  }
+}
+function addWatermark(vw, email) {
+  const now = new Date();
+  const stamp = `${email || ''} · ${now.toLocaleDateString('es-UY')} ${now.toLocaleTimeString('es-UY',{hour:'2-digit',minute:'2-digit'})}`;
+  const t = stamp.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='360' height='220'>` +
+    `<text x='180' y='110' transform='rotate(-28 180 110)' fill='rgba(20,20,20,0.13)' ` +
+    `font-size='15' font-family='Arial,sans-serif' text-anchor='middle'>${t}</text></svg>`;
+  const ov = document.createElement('div');
+  ov.className = 'wm-overlay';
+  ov.style.backgroundImage = `url("data:image/svg+xml;utf8,${encodeURIComponent(svg)}")`;
+  ov.style.backgroundRepeat = 'repeat';
+  vw.appendChild(ov);
+}
+
+/* ── Renderizadores (librerías cargadas on-demand por CDN) ── */
+async function fetchBytes(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return await r.arrayBuffer();
+}
+async function renderPdf(url, content) {
+  await loadScript(LIB.pdf);
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc = LIB.pdfWorker;
+  const data = await fetchBytes(url);
+  const pdf = await window.pdfjsLib.getDocument({ data }).promise;
+  content.innerHTML = '';
+  const wrap = document.createElement('div'); wrap.className = 'pdf-pages'; content.appendChild(wrap);
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const viewport = page.getViewport({ scale: 1.5 });
+    const canvas = document.createElement('canvas');
+    canvas.className = 'pdf-page';
+    canvas.width = viewport.width; canvas.height = viewport.height;
+    wrap.appendChild(canvas);
+    await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+  }
+}
+async function renderDocx(url, content) {
+  await loadScript(LIB.jszip);
+  await loadScript(LIB.docx);
+  const data = await fetchBytes(url);
+  content.innerHTML = '';
+  const target = document.createElement('div'); target.className = 'docx-wrap'; content.appendChild(target);
+  await window.docx.renderAsync(data, target);
+}
+async function renderPptx(url, content) {
+  await loadScript(LIB.jquery);
+  await loadScript(LIB.jszip);
+  await loadScript(LIB.jsziputils);
+  loadCss(LIB.pptxCss);
+  await loadScript(LIB.pptxjs);
+  await loadScript(LIB.divs2slides);
+  content.innerHTML = '<div id="pptx-result" class="pptx-wrap"></div>';
+  // PPTXjs renderiza de forma asíncrona (no devuelve promesa); las diapositivas aparecen a medida que procesa.
+  window.jQuery('#pptx-result').pptxToHtml({ pptxFileUrl: url, slideMode: false, keyBoardShortCut: false });
+}
+function legacyFallback(name, url, opts) {
+  const dl = opts.noDownload
+    ? '<p style="font-size:.8rem;color:var(--gray)">La descarga está deshabilitada para este documento.</p>'
+    : `<a class="btn btn-orange" href="${url}" target="_blank" rel="noopener">⬇ Descargar ${esc(name)}</a>`;
+  return `<div class="empty" style="padding:3rem">
+    <div class="empty-icon">${fileIcon(name)}</div>
+    <p><strong>Formato antiguo (.${esc(extOf(name))})</strong></p>
+    <p style="font-size:.8rem;color:var(--gray);max-width:460px;margin:0 auto 1rem">
+      Los archivos <b>.doc</b> y <b>.ppt</b> no se pueden previsualizar en el navegador.
+      Convertilos a .docx / .pptx (o a PDF) para verlos inline.</p>
+    ${dl}
+  </div>`;
+}
+function renderErrorHTML(err, url, opts) {
+  const msg = String(err && err.message || err);
+  const isCors = /Failed to fetch|NetworkError|CORS|TypeError/i.test(msg);
+  const dl = opts.noDownload ? '' :
+    `<a class="btn btn-orange" href="${url}" target="_blank" rel="noopener">⬇ Descargar archivo</a>`;
+  return `<div class="empty" style="padding:3rem">
+    <div class="empty-icon">⚠️</div>
+    <p><strong>No se pudo mostrar el documento en el visor.</strong></p>
+    <p style="font-size:.8rem;color:var(--gray);max-width:480px;margin:0 auto 1rem">
+      ${isCors
+        ? 'Parece un problema de <b>CORS</b> del bucket de Storage: el navegador no puede leer el archivo. Configurá CORS con <code>cors.json</code> (ver README).'
+        : esc(msg)}
+    </p>
+    ${dl}
+  </div>`;
+}
 
 /* ── HELPERS ── */
 const el  = id => document.getElementById(id);
@@ -1162,6 +1382,48 @@ function guessContentType(name) {
     pptx:'application/vnd.openxmlformats-officedocument.presentationml.presentation'
   })[extOf(name)] || 'application/octet-stream';
 }
+
+/* ── PROTECCIONES: opciones por usuario+informe ── */
+const DEFAULT_OPTS = { watermark: true, noPrint: false, noDownload: false, noCopy: false };
+const OPT_DEFS = [
+  { key: 'watermark',  icon: '💧', label: 'Marca de agua (email · fecha)' },
+  { key: 'noPrint',    icon: '🖨️', label: 'Bloquear impresión' },
+  { key: 'noDownload', icon: '⬇️', label: 'Bloquear descarga' },
+  { key: 'noCopy',     icon: '🖱️', label: 'Bloquear clic derecho / selección' },
+];
+function mergeOpts(o) { return Object.assign({}, DEFAULT_OPTS, o || {}); }
+
+/* ── Librerías de render (CDN), cargadas una sola vez y bajo demanda ── */
+const LIB = {
+  pdf:        'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
+  pdfWorker:  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js',
+  jszip:      'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',
+  jsziputils: 'https://cdnjs.cloudflare.com/ajax/libs/jszip-utils/0.1.0/jszip-utils.min.js',
+  docx:       'https://unpkg.com/docx-preview@0.3.2/dist/docx-preview.min.js',
+  jquery:     'https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js',
+  pptxjs:     'https://cdn.jsdelivr.net/gh/meshesha/PPTXjs@master/js/pptxjs.min.js',
+  divs2slides:'https://cdn.jsdelivr.net/gh/meshesha/PPTXjs@master/js/divs2slides.min.js',
+  pptxCss:    'https://cdn.jsdelivr.net/gh/meshesha/PPTXjs@master/css/pptxjs.min.css',
+};
+const _loadedLibs = {};
+function loadScript(src) {
+  if (_loadedLibs[src]) return _loadedLibs[src];
+  _loadedLibs[src] = new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = src; s.onload = () => res();
+    s.onerror = () => rej(new Error('No se pudo cargar la librería: ' + src));
+    document.head.appendChild(s);
+  });
+  return _loadedLibs[src];
+}
+function loadCss(href) {
+  if (_loadedLibs[href]) return;
+  _loadedLibs[href] = true;
+  const l = document.createElement('link');
+  l.rel = 'stylesheet'; l.href = href;
+  document.head.appendChild(l);
+}
+
 function inject(tplId) { document.getElementById('root').innerHTML = document.getElementById(tplId).innerHTML; }
 function showAlert(id, type, msg) {
   const e = el(id); if(!e) return;

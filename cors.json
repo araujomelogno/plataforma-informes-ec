@@ -1,0 +1,12 @@
+[
+  {
+    "origin": [
+      "https://portal-informes-ec.web.app",
+      "https://portal-informes-ec.firebaseapp.com",
+      "http://localhost:5000"
+    ],
+    "method": ["GET"],
+    "responseHeader": ["Content-Type", "Content-Length"],
+    "maxAgeSeconds": 3600
+  }
+]
