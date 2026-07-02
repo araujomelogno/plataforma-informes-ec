@@ -5,7 +5,7 @@ service firebase.storage {
     // Solo archivos dentro de /reports/
     match /reports/{fileName} {
 
-      // Cualquier usuario autenticado puede leer (descargar) los HTMLs
+      // Cualquier usuario autenticado puede leer (descargar) los informes (HTML, PDF, Word, PowerPoint)
       allow read: if request.auth != null;
 
       // Solo el admin puede subir o eliminar archivos
