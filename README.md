@@ -160,4 +160,51 @@ Sí, desde Firebase Console → Authentication. El documento en Firestore se pue
 
 **¿Los informes HTML pueden tener imágenes/CSS/JS?**
 Sí, siempre que sean recursos inline o URLs absolutas externas. Recursos relativos no van a cargar porque el HTML se sirve desde Firebase Storage.
+
+---
+
+## 📄 Formatos soportados y visor
+
+El administrador puede subir **HTML, PDF, Word (.doc/.docx) y PowerPoint (.ppt/.pptx)**.
+El cliente los ve **inline** (dentro del portal), renderizados en su propio navegador:
+
+| Formato | Cómo se muestra |
+|---------|-----------------|
+| PDF | Renderizado con PDF.js (páginas en canvas) |
+| Word `.docx` | Renderizado con docx-preview |
+| PowerPoint `.pptx` | Renderizado con PPTXjs (la fidelidad puede variar en diapositivas complejas) |
+| HTML | En un `<iframe>` con sandbox |
+| `.doc` / `.ppt` (formatos viejos) | No se pueden previsualizar → se ofrece descarga. Convertí a `.docx`/`.pptx` o PDF |
+
+Las librerías de render se cargan desde CDN bajo demanda (solo cuando se abre un documento de ese tipo).
+
+---
+
+## 🔐 Protecciones por usuario e informe
+
+En **Panel Admin → Permisos**, dentro de cada informe asignado a un usuario, se puede activar:
+
+- 💧 **Marca de agua** — estampa el email del usuario + fecha/hora sobre el documento.
+- 🖨️ **Bloquear impresión** — desactiva Ctrl/Cmd+P y la impresión sale en blanco.
+- ⬇️ **Bloquear descarga** — oculta el botón de abrir/descargar.
+- 🖱️ **Bloquear clic derecho / selección**.
+
+> ⚠️ **Importante:** estas protecciones son **disuasivas**, no infalibles. En una web **no se puede impedir una captura de pantalla** (ni una foto con el celular), y un usuario técnico puede sortear los bloqueos. La protección más efectiva es la **marca de agua**, que deja rastro de quién visualizó el documento.
+
+---
+
+## ⚙️ Configurar CORS del bucket (requerido para el visor)
+
+Para que el navegador pueda **leer** los PDF/Word/PowerPoint y renderizarlos inline, el bucket de Storage necesita permitir CORS desde el dominio del portal. Se hace **una sola vez** con el archivo `cors.json` incluido:
+
+```bash
+# Necesitás gcloud/gsutil instalado y autenticado en el proyecto
+gsutil cors set cors.json gs://portal-informes-ec.firebasestorage.app
+```
+
+- Editá `cors.json` para incluir tus dominios reales (`web.app` / `firebaseapp.com` / dominio propio).
+- Si no configurás CORS, el visor mostrará un aviso y ofrecerá la descarga del archivo.
+- Los HTML **no** requieren CORS (se muestran vía `<iframe>`).
+
+---
 # plataforma-informes-ec
