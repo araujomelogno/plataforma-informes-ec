@@ -35,5 +35,14 @@ service cloud.firestore {
       allow read:  if isAuth() && (request.auth.uid == uid || isAdmin());
       allow write: if isAdmin();
     }
+
+    // ── Colección: sessions (métricas de acceso) ──
+    // Cada usuario crea su propia sesión y puede actualizar solo la suya
+    // (latido / cierre). Solo el admin puede leer las métricas.
+    match /sessions/{sid} {
+      allow create: if isAuth() && request.resource.data.uid == request.auth.uid;
+      allow update: if isAuth() && resource.data.uid == request.auth.uid;
+      allow read:   if isAdmin();
+    }
   }
 }

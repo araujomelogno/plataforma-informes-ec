@@ -207,4 +207,25 @@ gsutil cors set cors.json gs://portal-informes-ec.firebasestorage.app
 - Los HTML **no** requieren CORS (se muestran vía `<iframe>`).
 
 ---
+
+## 📊 Métricas de acceso
+
+En **Panel Admin → Métricas** se registra cada acceso al portal:
+
+- **Quién ingresa** (email del usuario)
+- **Cuántas veces** (cantidad de accesos por usuario)
+- **Por cuánto tiempo** (duración de cada sesión)
+- **Desde qué IP**
+
+Cómo funciona:
+
+- Cada carga autenticada crea un documento en la colección `sessions` de Firestore.
+- La **duración** se estima con un "latido" (`lastSeenAt`) que se actualiza cada 60 s mientras la pestaña está visible, más el cierre al hacer *Cerrar sesión* o dejar la página. (No se puede medir con exactitud al milisegundo en una web sin backend; es una estimación robusta.)
+- La **IP** se obtiene de un servicio público (`api.ipify.org`) al iniciar la sesión. Si ese servicio no responde, la IP queda vacía.
+
+Requiere **publicar las reglas de Firestore** actualizadas (incluyen la colección `sessions`): pegá el contenido de `firestore.rules` en Firebase Console → Firestore → Reglas → Publicar. Solo el admin puede leer las métricas.
+
+> Nota de consumo (plan gratuito): el latido escribe ~1 vez por minuto por sesión activa. Para un portal interno es despreciable; si tuvieras muchas sesiones largas simultáneas, se puede subir el intervalo.
+
+---
 # plataforma-informes-ec
