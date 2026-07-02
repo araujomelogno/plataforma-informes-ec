@@ -477,7 +477,7 @@
       <div id="tab-reports">
         <div class="page-header">
           <div class="accent-bar"></div>
-          <h2>Informes <span class="accent">HTML</span></h2>
+          <h2>Informes <span class="accent">y Documentos</span></h2>
           <p>Subí y administrá los archivos de reportes</p>
         </div>
 
@@ -491,9 +491,9 @@
               ondragleave="handleDragLeave(event)">
               <div class="upload-icon">📁</div>
               <p><strong>Hacé clic para subir</strong> o arrastrá archivos aquí</p>
-              <p class="hint">Solo archivos .html · Podés subir varios a la vez</p>
+              <p class="hint">HTML, PDF, Word (.doc/.docx) y PowerPoint (.ppt/.pptx) · Podés subir varios a la vez</p>
             </div>
-            <input type="file" id="file-input" accept=".html" multiple class="hidden" onchange="handleFileSelect(event)" />
+            <input type="file" id="file-input" accept=".html,.htm,.pdf,.doc,.docx,.ppt,.pptx" multiple class="hidden" onchange="handleFileSelect(event)" />
             <div id="upload-progress" class="hidden progress-wrap">
               <div class="progress-meta">
                 <span id="upload-status">Subiendo...</span>
@@ -715,7 +715,7 @@ function renderReportsTable() {
       <tbody>
         ${allReports.map(r => `
         <tr>
-          <td style="font-weight:600">📄 ${esc(r.name)}</td>
+          <td style="font-weight:600">${fileIcon(r.name)} ${esc(r.name)}</td>
           <td style="color:var(--gray)">${fmtSize(r.size)}</td>
           <td style="color:var(--gray)">${fmtDate(r.createdAt)}</td>
           <td><div class="td-actions">
@@ -731,7 +731,7 @@ function handleDragOver(e) { e.preventDefault(); el('upload-area').classList.add
 function handleDragLeave()  { el('upload-area').classList.remove('drag'); }
 function handleDrop(e) {
   e.preventDefault(); el('upload-area').classList.remove('drag');
-  const files = [...e.dataTransfer.files].filter(f => f.name.toLowerCase().endsWith('.html'));
+  const files = [...e.dataTransfer.files].filter(f => isAllowed(f.name));
   if (files.length) uploadFiles(files);
 }
 function handleFileSelect(e) {
@@ -740,6 +740,13 @@ function handleFileSelect(e) {
 }
 
 async function uploadFiles(files) {
+  const rejected = files.filter(f => !isAllowed(f.name));
+  files = files.filter(f => isAllowed(f.name));
+  if (rejected.length)
+    alert('Se ignoraron archivos con formato no soportado:\n' + rejected.map(f => f.name).join('\n') +
+          '\n\nFormatos permitidos: HTML, PDF, DOC, DOCX, PPT, PPTX.');
+  if (!files.length) return;
+
   el('upload-progress').classList.remove('hidden');
   const bar = el('progress-bar');
   const statusEl = el('upload-status');
@@ -754,7 +761,7 @@ async function uploadFiles(files) {
 
     const path = `reports/${Date.now()}_${file.name}`;
     try {
-      const task = storage.ref(path).put(file);
+      const task = storage.ref(path).put(file, { contentType: file.type || guessContentType(file.name) });
       await new Promise((res, rej) => {
         task.on('state_changed',
           s => {
@@ -773,6 +780,7 @@ async function uploadFiles(files) {
             try {
               await db.collection('reports').add({
                 name: file.name, storagePath: path, size: file.size,
+                ext: extOf(file.name),
                 createdAt: firebase.firestore.FieldValue.serverTimestamp()
               });
               res();
@@ -964,7 +972,7 @@ async function loadUserReports() {
   cont.innerHTML = `<div class="report-grid">
     ${reports.map(r => `
     <div class="report-card" onclick="openUserReport('${r.storagePath}','${esc(r.name)}')">
-      <div class="report-card-icon">📊</div>
+      <div class="report-card-icon">${fileIcon(r.name)}</div>
       <h3>${esc(r.name)}</h3>
       <div class="meta">${fmtSize(r.size)} · ${fmtDate(r.createdAt)}</div>
     </div>`).join('')}
@@ -978,15 +986,30 @@ async function openUserReport(storagePath, name) {
 
 /* ── VIEWER ── */
 function openViewer(url, name) {
+  const kind = fileKind(name);
+  let iframe;
+  if (kind === 'office') {
+    // Los navegadores no renderizan Word/PowerPoint: usamos el visor web de Microsoft Office.
+    // Necesita que la URL de descarga de Firebase (con token) sea accesible públicamente.
+    const src = 'https://view.officeapps.live.com/op/embed.aspx?src=' + encodeURIComponent(url);
+    iframe = `<iframe class="viewer-iframe" src="${src}"></iframe>`;
+  } else if (kind === 'pdf') {
+    // El PDF se renderiza nativamente en el iframe (sin sandbox para no bloquear el visor del navegador).
+    iframe = `<iframe class="viewer-iframe" src="${url}"></iframe>`;
+  } else {
+    // HTML subido por el admin: se mantiene el sandbox por seguridad.
+    iframe = `<iframe class="viewer-iframe" src="${url}" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>`;
+  }
+  const linkLabel = kind === 'office' ? '⬇ Descargar' : '↗ Nueva pestaña';
   const vw = document.createElement('div');
   vw.className = 'viewer'; vw.id = 'viewer';
   vw.innerHTML = `
     <div class="viewer-bar">
       <button class="btn btn-outline-dark btn-sm" onclick="closeViewer()">← Volver</button>
-      <div class="viewer-title">📄 ${esc(name)}</div>
-      <a href="${url}" target="_blank" rel="noopener" class="btn btn-outline-dark btn-sm">↗ Nueva pestaña</a>
+      <div class="viewer-title">${fileIcon(name)} ${esc(name)}</div>
+      <a href="${url}" target="_blank" rel="noopener" class="btn btn-outline-dark btn-sm">${linkLabel}</a>
     </div>
-    <iframe class="viewer-iframe" src="${url}" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>`;
+    ${iframe}`;
   document.body.appendChild(vw);
 }
 function closeViewer() { const v = document.getElementById('viewer'); if(v) v.remove(); }
@@ -996,6 +1019,33 @@ const el  = id => document.getElementById(id);
 const v   = id => (el(id)?.value || '').trim();
 const on  = (id, ev, fn) => el(id)?.addEventListener(ev, fn);
 const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+/* ── ARCHIVOS: tipos soportados ── */
+const ALLOWED_EXT = ['html','htm','pdf','doc','docx','ppt','pptx'];
+function extOf(name)   { const m = String(name).toLowerCase().match(/\.([a-z0-9]+)$/); return m ? m[1] : ''; }
+function isAllowed(name){ return ALLOWED_EXT.includes(extOf(name)); }
+function fileKind(name) {
+  const e = extOf(name);
+  if (e === 'pdf') return 'pdf';
+  if (['doc','docx','ppt','pptx'].includes(e)) return 'office';
+  return 'html'; // .html/.htm y desconocidos: se muestran como HTML (compatibilidad con informes previos)
+}
+function fileIcon(name) {
+  const e = extOf(name);
+  if (e === 'pdf')                return '📕';
+  if (e === 'doc' || e === 'docx') return '📘';
+  if (e === 'ppt' || e === 'pptx') return '📙';
+  return '🌐'; // HTML
+}
+function guessContentType(name) {
+  return ({
+    html:'text/html', htm:'text/html', pdf:'application/pdf',
+    doc:'application/msword',
+    docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    ppt:'application/vnd.ms-powerpoint',
+    pptx:'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+  })[extOf(name)] || 'application/octet-stream';
+}
 function inject(tplId) { document.getElementById('root').innerHTML = document.getElementById(tplId).innerHTML; }
 function showAlert(id, type, msg) {
   const e = el(id); if(!e) return;
