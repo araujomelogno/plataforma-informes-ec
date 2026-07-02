@@ -398,6 +398,64 @@
     .two-col { display: grid; grid-template-columns: 1fr 1fr auto; gap: 1rem; align-items: end; }
     @media (max-width: 700px) { .two-col { grid-template-columns: 1fr; } }
 
+    /* ══════════════════════════════════════
+       LOADING OVERLAY (Cargando informe)
+    ══════════════════════════════════════ */
+    .loading-overlay {
+      position: fixed; inset: 0;
+      background: rgba(58, 56, 56, 0.92);
+      backdrop-filter: blur(4px);
+      z-index: 200;
+      display: flex; align-items: center; justify-content: center;
+      animation: fadeIn 0.25s ease-out;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to   { opacity: 1; }
+    }
+    .loading-box {
+      background: var(--white);
+      border-radius: 8px;
+      padding: 2.5rem 3rem;
+      max-width: 420px; width: 90%;
+      text-align: center;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+    }
+    .loading-box .accent-bar {
+      margin: 0 auto 1.25rem;
+    }
+    .loading-box h3 {
+      font-size: 1.15rem; font-weight: 800;
+      color: var(--dark); margin-bottom: 0.4rem;
+      letter-spacing: -0.01em;
+    }
+    .loading-box .loading-file {
+      font-size: 0.78rem; color: var(--gray);
+      font-weight: 600; margin-bottom: 1.5rem;
+      word-break: break-word;
+    }
+    .loading-box .progress {
+      height: 8px; background: var(--gray-light);
+      border-radius: 4px; overflow: hidden;
+      margin-bottom: 0.7rem;
+    }
+    .loading-box .progress-bar-anim {
+      height: 100%; width: 0%;
+      background: linear-gradient(90deg, var(--orange) 0%, #FF8A5C 50%, var(--orange) 100%);
+      background-size: 200% 100%;
+      border-radius: 4px;
+      transition: width 0.3s ease-out;
+      animation: shimmer 1.5s linear infinite;
+    }
+    @keyframes shimmer {
+      0%   { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+    .loading-box .progress-pct {
+      font-size: 0.75rem; color: var(--gray);
+      font-weight: 700; letter-spacing: 0.05em;
+    }
+
     .hidden { display: none !important; }
   </style>
 </head>
@@ -417,7 +475,7 @@
           <em>Experiencia.</em>
           <em>Inteligencia.</em>
         </div>
-        <div class="tagline-sub">Portal de informes</div>
+        <div class="tagline-sub">Portal interno de informes</div>
       </div>
     </div>
     <div class="login-form-panel">
@@ -613,7 +671,6 @@
    🔧 CONFIGURACIÓN FIREBASE
    Reemplazá los valores con los de tu proyecto
 ══════════════════════════════════════════════ */
-
 const firebaseConfig = {
   apiKey: "AIzaSyCNYTImSJphSSfcfPuMsgKWCFy26VH2fBk",
   authDomain: "portal-informes-ec.firebaseapp.com",
@@ -623,6 +680,7 @@ const firebaseConfig = {
   appId: "1:1071042461319:web:1d13c64dc59acfe10a4222",
   measurementId: "G-Z04M5W003B"
 };
+
 firebase.initializeApp(firebaseConfig);
 const auth    = firebase.auth();
 const db      = firebase.firestore();
@@ -831,8 +889,17 @@ async function deleteReport(id, storagePath) {
 }
 
 async function previewReport(storagePath, name) {
-  const url = await storage.ref(storagePath).getDownloadURL();
-  openViewer(url, name);
+  showLoadingOverlay(name);
+  try {
+    const url = await storage.ref(storagePath).getDownloadURL();
+    openViewer(url, name);
+    const iframe = document.querySelector('.viewer-iframe');
+    if (iframe) iframe.addEventListener('load', hideLoadingOverlay, { once: true });
+    setTimeout(hideLoadingOverlay, 8000);
+  } catch (err) {
+    hideLoadingOverlay();
+    alert('Error al cargar el informe: ' + (err.message || err));
+  }
 }
 
 /* ── USERS ── */
@@ -972,8 +1039,57 @@ async function loadUserReports() {
 }
 
 async function openUserReport(storagePath, name) {
-  const url = await storage.ref(storagePath).getDownloadURL();
-  openViewer(url, name);
+  showLoadingOverlay(name);
+  try {
+    const url = await storage.ref(storagePath).getDownloadURL();
+    openViewer(url, name);
+    const iframe = document.querySelector('.viewer-iframe');
+    if (iframe) iframe.addEventListener('load', hideLoadingOverlay, { once: true });
+    setTimeout(hideLoadingOverlay, 8000);
+  } catch (err) {
+    hideLoadingOverlay();
+    alert('Error al cargar el informe: ' + (err.message || err));
+  }
+}
+
+/* ── LOADING OVERLAY ── */
+function showLoadingOverlay(fileName) {
+  const ov = document.createElement('div');
+  ov.className = 'loading-overlay';
+  ov.id = 'loading-overlay';
+  ov.innerHTML = `
+    <div class="loading-box">
+      <div class="accent-bar"></div>
+      <h3>Cargando informe</h3>
+      <div class="loading-file">📄 ${esc(fileName)}</div>
+      <div class="progress"><div class="progress-bar-anim" id="loading-bar"></div></div>
+      <div class="progress-pct" id="loading-pct">0%</div>
+    </div>`;
+  document.body.appendChild(ov);
+
+  // Animación de progreso simulado: avanza rápido hasta 90% y se queda esperando
+  const bar = document.getElementById('loading-bar');
+  const pct = document.getElementById('loading-pct');
+  let p = 0;
+  const interval = setInterval(() => {
+    p += (90 - p) * 0.08;
+    if (p > 89.5) p = 89.5;
+    bar.style.width = p + '%';
+    pct.textContent = Math.round(p) + '%';
+  }, 80);
+  ov._interval = interval;
+  return ov;
+}
+
+function hideLoadingOverlay() {
+  const ov = document.getElementById('loading-overlay');
+  if (!ov) return;
+  clearInterval(ov._interval);
+  const bar = document.getElementById('loading-bar');
+  const pct = document.getElementById('loading-pct');
+  if (bar) bar.style.width = '100%';
+  if (pct) pct.textContent = '100%';
+  setTimeout(() => ov.remove(), 250);
 }
 
 /* ── VIEWER ── */
