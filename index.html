@@ -1310,10 +1310,15 @@ async function renderDocx(url, content) {
   await window.docx.renderAsync(data, target);
 }
 async function renderPptx(url, content) {
+  // El orden importa: PPTXjs depende de jQuery, JSZip, JSZipUtils, FileReaderJS y (para gráficos) d3 + nv.d3.
   await loadScript(LIB.jquery);
   await loadScript(LIB.jszip);
   await loadScript(LIB.jsziputils);
+  await loadScript(LIB.filereader);
+  await loadScript(LIB.d3);
+  await loadScript(LIB.nvd3);
   loadCss(LIB.pptxCss);
+  loadCss(LIB.nvd3Css);
   await loadScript(LIB.pptxjs);
   await loadScript(LIB.divs2slides);
   content.innerHTML = '<div id="pptx-result" class="pptx-wrap"></div>';
@@ -1401,6 +1406,10 @@ const LIB = {
   jsziputils: 'https://cdnjs.cloudflare.com/ajax/libs/jszip-utils/0.1.0/jszip-utils.min.js',
   docx:       'https://unpkg.com/docx-preview@0.3.2/dist/docx-preview.min.js',
   jquery:     'https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js',
+  filereader: 'https://cdn.jsdelivr.net/gh/meshesha/PPTXjs@master/js/filereader.js',
+  d3:         'https://cdn.jsdelivr.net/gh/meshesha/PPTXjs@master/js/d3.min.js',
+  nvd3:       'https://cdn.jsdelivr.net/gh/meshesha/PPTXjs@master/js/nv.d3.min.js',
+  nvd3Css:    'https://cdn.jsdelivr.net/gh/meshesha/PPTXjs@master/css/nv.d3.min.css',
   pptxjs:     'https://cdn.jsdelivr.net/gh/meshesha/PPTXjs@master/js/pptxjs.min.js',
   divs2slides:'https://cdn.jsdelivr.net/gh/meshesha/PPTXjs@master/js/divs2slides.min.js',
   pptxCss:    'https://cdn.jsdelivr.net/gh/meshesha/PPTXjs@master/css/pptxjs.min.css',
