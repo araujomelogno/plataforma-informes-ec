@@ -1302,17 +1302,18 @@ async function renderPdf(url, content) {
   }
 }
 async function renderDocx(url, content) {
-  await loadScript(LIB.jszip);
+  await useJSZip(LIB.jszip3, '__jszip3');   // docx-preview requiere JSZip 3.x
   await loadScript(LIB.docx);
+  window.JSZip = window.__jszip3;            // asegurar 3.x al renderizar
   const data = await fetchBytes(url);
   content.innerHTML = '';
   const target = document.createElement('div'); target.className = 'docx-wrap'; content.appendChild(target);
   await window.docx.renderAsync(data, target);
 }
 async function renderPptx(url, content) {
-  // El orden importa: PPTXjs depende de jQuery, JSZip, JSZipUtils, FileReaderJS y (para gráficos) d3 + nv.d3.
+  // El orden importa: PPTXjs depende de jQuery, JSZip (2.x), JSZipUtils, FileReaderJS y (para gráficos) d3 + nv.d3.
   await loadScript(LIB.jquery);
-  await loadScript(LIB.jszip);
+  await useJSZip(LIB.jszip2, '__jszip2');    // PPTXjs usa la API de JSZip 2.x (new JSZip / .load)
   await loadScript(LIB.jsziputils);
   await loadScript(LIB.filereader);
   await loadScript(LIB.d3);
@@ -1321,6 +1322,7 @@ async function renderPptx(url, content) {
   loadCss(LIB.nvd3Css);
   await loadScript(LIB.pptxjs);
   await loadScript(LIB.divs2slides);
+  window.JSZip = window.__jszip2;            // asegurar 2.x justo antes de renderizar
   content.innerHTML = '<div id="pptx-result" class="pptx-wrap"></div>';
   // PPTXjs renderiza de forma asíncrona (no devuelve promesa); las diapositivas aparecen a medida que procesa.
   window.jQuery('#pptx-result').pptxToHtml({ pptxFileUrl: url, slideMode: false, keyBoardShortCut: false });
@@ -1402,7 +1404,8 @@ function mergeOpts(o) { return Object.assign({}, DEFAULT_OPTS, o || {}); }
 const LIB = {
   pdf:        'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
   pdfWorker:  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js',
-  jszip:      'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',
+  jszip3:     'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',       // para docx-preview
+  jszip2:     'https://cdn.jsdelivr.net/gh/meshesha/PPTXjs@master/js/jszip.min.js',     // PPTXjs usa la API de JSZip 2.x
   jsziputils: 'https://cdnjs.cloudflare.com/ajax/libs/jszip-utils/0.1.0/jszip-utils.min.js',
   docx:       'https://unpkg.com/docx-preview@0.3.2/dist/docx-preview.min.js',
   jquery:     'https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js',
@@ -1431,6 +1434,16 @@ function loadCss(href) {
   const l = document.createElement('link');
   l.rel = 'stylesheet'; l.href = href;
   document.head.appendChild(l);
+}
+// docx-preview necesita JSZip 3.x y PPTXjs la API de JSZip 2.x: no pueden compartir
+// window.JSZip. Cargamos cada versión una vez, la guardamos en un slot y activamos
+// la correcta como global antes de cada render.
+async function useJSZip(url, slot) {
+  if (!window[slot]) {
+    await loadScript(url);
+    window[slot] = window.JSZip;
+  }
+  window.JSZip = window[slot];
 }
 
 function inject(tplId) { document.getElementById('root').innerHTML = document.getElementById(tplId).innerHTML; }
