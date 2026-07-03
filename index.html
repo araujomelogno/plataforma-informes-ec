@@ -496,6 +496,30 @@
       font-weight: 700; letter-spacing: 0.05em;
     }
 
+    /* Filtro de fechas en métricas */
+    .metrics-filter { display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap; }
+    .metrics-filter input[type=date] {
+      padding: 0.5rem 0.6rem; border: 1.5px solid var(--border); border-radius: 3px;
+      font-family: inherit; font-size: 0.82rem; color: var(--dark);
+    }
+
+    /* Diálogo modal (accesos por usuario) */
+    .modal-backdrop {
+      position: fixed; inset: 0; background: rgba(58,56,56,0.6);
+      z-index: 150; display: flex; align-items: center; justify-content: center; padding: 1rem;
+    }
+    .modal-box {
+      background: var(--white); border-radius: 6px; width: 100%; max-width: 640px;
+      max-height: 85vh; overflow: auto; box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+    }
+    .modal-head {
+      display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+      padding: 1rem 1.25rem; border-bottom: 1px solid var(--border);
+      position: sticky; top: 0; background: var(--white);
+    }
+    .modal-title { font-size: 0.95rem; font-weight: 800; color: var(--dark); word-break: break-word; }
+    .modal-body { padding: 1.1rem 1.25rem; }
+
     .hidden { display: none !important; }
   </style>
 </head>
@@ -686,6 +710,19 @@
           <div class="card-header">
             <span class="card-header-title">Sesiones recientes</span>
             <button class="btn btn-outline btn-sm" onclick="loadMetrics()">↻ Actualizar</button>
+          </div>
+          <div class="card-body" style="padding-bottom:0.5rem">
+            <div class="metrics-filter">
+              <div class="form-group" style="margin:0">
+                <label>Desde</label>
+                <input type="date" id="metrics-from" onchange="renderSessionsTable()" />
+              </div>
+              <div class="form-group" style="margin:0">
+                <label>Hasta</label>
+                <input type="date" id="metrics-to" onchange="renderSessionsTable()" />
+              </div>
+              <button class="btn btn-outline btn-sm" onclick="clearMetricsFilter()">Limpiar</button>
+            </div>
           </div>
           <div id="metrics-sessions"></div>
         </div>
@@ -1006,7 +1043,10 @@ function renderUsersTable() {
           <td style="font-weight:600">${esc(u.email)}</td>
           <td><span class="badge badge-user">${u.role}</span></td>
           <td style="color:var(--gray)">${fmtDate(u.createdAt)}</td>
-          <td><button class="btn btn-outline btn-sm" onclick="goToUserPerms('${u.id}')">🔐 Permisos</button></td>
+          <td><div class="td-actions">
+            <button class="btn btn-outline btn-sm" onclick="goToUserPerms('${u.id}')">🔐 Permisos</button>
+            <button class="btn btn-outline btn-sm" onclick="showUserAccess('${u.id}','${esc(u.email)}')">👁 Accesos</button>
+          </div></td>
         </tr>`).join('')}
       </tbody>
     </table>`;
@@ -1436,23 +1476,29 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') touchSession();
 });
 
+let _allSessions = [];   // sesiones cargadas para el panel de métricas
+
 async function loadMetrics() {
   const sumEl = el('metrics-summary'), sesEl = el('metrics-sessions');
   if (!sumEl) return;
   sumEl.innerHTML = '<div class="loading">Cargando métricas...</div>';
   if (sesEl) sesEl.innerHTML = '';
-  let sessions = [];
   try {
     const snap = await db.collection('sessions').orderBy('startAt', 'desc').limit(500).get();
-    sessions = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    _allSessions = snap.docs.map(d => ({ id: d.id, ...d.data() }));
   } catch (e) {
     sumEl.innerHTML = emptyHTML('⚠️', 'No se pudieron cargar las métricas.<br>¿Publicaste las reglas de Firestore para <b>sessions</b>?');
     return;
   }
-  if (!sessions.length) { sumEl.innerHTML = emptyHTML('📊', 'Todavía no hay accesos registrados.'); return; }
+  if (!_allSessions.length) {
+    sumEl.innerHTML = emptyHTML('📊', 'Todavía no hay accesos registrados.');
+    if (sesEl) sesEl.innerHTML = '';
+    return;
+  }
 
+  // Resumen por usuario (sobre todas las sesiones, sin filtro de fechas)
   const byUser = {};
-  sessions.forEach(s => {
+  _allSessions.forEach(s => {
     const k = s.email || s.uid;
     if (!byUser[k]) byUser[k] = { email: k, count: 0, total: 0, last: 0, lastIp: '—' };
     byUser[k].count++;
@@ -1471,9 +1517,26 @@ async function loadMetrics() {
       <td style="color:var(--gray)">${esc(u.lastIp)}</td>
     </tr>`).join('')}</tbody></table></div>`;
 
-  if (sesEl) sesEl.innerHTML = `<div style="overflow-x:auto"><table>
+  renderSessionsTable();   // detalle de sesiones (respeta el rango de fechas)
+}
+
+// Renderiza la tabla de sesiones recientes aplicando el filtro Desde/Hasta.
+function renderSessionsTable() {
+  const sesEl = el('metrics-sessions');
+  if (!sesEl) return;
+  const fromV = el('metrics-from') && el('metrics-from').value;
+  const toV   = el('metrics-to') && el('metrics-to').value;
+  const from = fromV ? new Date(fromV + 'T00:00:00').getTime() : null;
+  const to   = toV   ? new Date(toV   + 'T23:59:59').getTime() : null;
+
+  let list = _allSessions;
+  if (from) list = list.filter(s => tsMs(s.startAt) >= from);
+  if (to)   list = list.filter(s => tsMs(s.startAt) <= to);
+
+  if (!list.length) { sesEl.innerHTML = emptyHTML('🔎', 'No hay sesiones en ese rango de fechas.'); return; }
+  sesEl.innerHTML = `<div style="overflow-x:auto"><table>
     <thead><tr><th>Usuario</th><th>Inicio</th><th>Duración</th><th>IP</th><th>Dispositivo</th></tr></thead>
-    <tbody>${sessions.slice(0, 200).map(s => `<tr>
+    <tbody>${list.slice(0, 300).map(s => `<tr>
       <td style="font-weight:600">${esc(s.email || s.uid)}</td>
       <td style="color:var(--gray)">${fmtDateTime(tsMs(s.startAt))}</td>
       <td>${s.ended ? fmtDur(sessionDuration(s)) : '<span style="color:var(--orange);font-weight:600">en curso</span>'}</td>
@@ -1481,6 +1544,58 @@ async function loadMetrics() {
       <td style="color:var(--gray);font-size:.72rem">${esc(shortUA(s.userAgent))}</td>
     </tr>`).join('')}</tbody></table></div>`;
 }
+function clearMetricsFilter() {
+  if (el('metrics-from')) el('metrics-from').value = '';
+  if (el('metrics-to'))   el('metrics-to').value = '';
+  renderSessionsTable();
+}
+
+// Diálogo con los accesos de un usuario puntual (desde la pestaña Usuarios).
+async function showUserAccess(uid, email) {
+  openAccessModal(email, '<div class="loading">Cargando accesos...</div>');
+  let sessions = [];
+  try {
+    const snap = await db.collection('sessions').where('uid', '==', uid).get();
+    sessions = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    sessions.sort((a, b) => tsMs(b.startAt) - tsMs(a.startAt));
+  } catch (e) {
+    setAccessModalBody(emptyHTML('⚠️', 'No se pudieron cargar los accesos.<br>¿Publicaste las reglas de Firestore para <b>sessions</b>?'));
+    return;
+  }
+  if (!sessions.length) { setAccessModalBody(emptyHTML('📭', 'Este usuario todavía no registra accesos.')); return; }
+  const total = sessions.reduce((a, s) => a + sessionDuration(s), 0);
+  setAccessModalBody(`
+    <p style="font-size:.8rem;color:var(--gray);font-weight:500;margin-bottom:.85rem">
+      ${sessions.length} acceso(s) · tiempo total ${fmtDur(total)}
+    </p>
+    <div style="overflow-x:auto"><table>
+      <thead><tr><th>Fecha</th><th>Hora</th><th>Duración</th><th>IP</th></tr></thead>
+      <tbody>${sessions.map(s => {
+        const ms = tsMs(s.startAt), d = ms ? new Date(ms) : null;
+        return `<tr>
+          <td>${d ? d.toLocaleDateString('es-UY', {day:'2-digit',month:'2-digit',year:'numeric'}) : '—'}</td>
+          <td>${d ? d.toLocaleTimeString('es-UY', {hour:'2-digit',minute:'2-digit'}) : '—'}</td>
+          <td>${s.ended ? fmtDur(sessionDuration(s)) : '<span style="color:var(--orange);font-weight:600">en curso</span>'}</td>
+          <td style="color:var(--gray)">${esc(s.ip || '—')}</td>
+        </tr>`;
+      }).join('')}</tbody></table></div>`);
+}
+function openAccessModal(email, bodyHtml) {
+  closeAccessModal();
+  const m = document.createElement('div');
+  m.className = 'modal-backdrop'; m.id = 'access-modal';
+  m.onclick = (e) => { if (e.target === m) closeAccessModal(); };
+  m.innerHTML = `<div class="modal-box">
+    <div class="modal-head">
+      <span class="modal-title">👁 Accesos de ${esc(email)}</span>
+      <button class="btn btn-outline btn-sm" onclick="closeAccessModal()">✕ Cerrar</button>
+    </div>
+    <div class="modal-body" id="access-modal-body">${bodyHtml}</div>
+  </div>`;
+  document.body.appendChild(m);
+}
+function setAccessModalBody(html) { const b = el('access-modal-body'); if (b) b.innerHTML = html; }
+function closeAccessModal() { const m = el('access-modal'); if (m) m.remove(); }
 function tsMs(ts) { return ts && ts.toDate ? ts.toDate().getTime() : (ts ? new Date(ts).getTime() : 0); }
 function sessionDuration(s) {
   const a = tsMs(s.startAt), b = tsMs(s.endAt) || tsMs(s.lastSeenAt);
