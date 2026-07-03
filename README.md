@@ -228,4 +228,57 @@ Requiere **publicar las reglas de Firestore** actualizadas (incluyen la colecci�
 > Nota de consumo (plan gratuito): el latido escribe ~1 vez por minuto por sesión activa. Para un portal interno es despreciable; si tuvieras muchas sesiones largas simultáneas, se puede subir el intervalo.
 
 ---
+
+## 📈 Analítica de uso dentro de los dashboards (informes HTML)
+
+En **Panel Admin → Métricas → "Analítica de dashboards"** se ve, por informe, **qué pestañas/secciones usan** los clientes: cantidad de visitas y tiempo (total y promedio) por pestaña.
+
+Cómo funciona: el dashboard (dentro del iframe) manda eventos por `postMessage`; el portal —que sabe quién es el usuario, su sesión y qué informe abrió— los guarda en la colección `dashboardEvents` de Firestore. No hace falta Firebase ni claves dentro del dashboard.
+
+### Qué agregar en cada dashboard HTML
+
+1. Marcá cada pestaña con `data-track="Nombre"` en el elemento donde se hace clic, y la inicial con `data-track-default`:
+
+```html
+<button data-track="Ventas" data-track-default>Ventas</button>
+<button data-track="Stock">Stock</button>
+```
+
+2. Pegá este bloque una vez, antes de `</body>`:
+
+```html
+<!-- Analítica del portal (uso por pestaña) -->
+<script>
+(function () {
+  var current = null, since = 0;
+  function send(event, section, extra) {
+    var msg = { __portalAnalytics: true, event: event, section: section || null, ts: Date.now() };
+    if (extra) for (var k in extra) msg[k] = extra[k];
+    try { parent.postMessage(msg, '*'); } catch (e) {}
+  }
+  function activate(name) {
+    if (!name || name === current) return;
+    if (current !== null) send('tab', current, { dwellMs: Date.now() - since });
+    current = name; since = Date.now();
+  }
+  function flush() { if (current !== null) { send('tab', current, { dwellMs: Date.now() - since }); since = Date.now(); } }
+  function init() {
+    send('open');
+    var def = document.querySelector('[data-track-default]') || document.querySelector('[data-track]');
+    if (def) activate(def.getAttribute('data-track'));
+  }
+  document.addEventListener('click', function (e) {
+    var t = e.target.closest && e.target.closest('[data-track]');
+    if (t) activate(t.getAttribute('data-track'));
+  }, true);
+  document.addEventListener('visibilitychange', function () { if (document.hidden) flush(); });
+  window.addEventListener('pagehide', flush);
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
+})();
+</script>
+```
+
+> Requiere publicar el `firestore.rules` actualizado (colección `dashboardEvents`). Solo el admin lee la analítica. Cada cambio de pestaña genera 1 escritura en Firestore (despreciable para uso interno).
+
+---
 # plataforma-informes-ec
