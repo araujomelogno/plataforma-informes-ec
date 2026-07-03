@@ -726,6 +726,13 @@
           </div>
           <div id="metrics-sessions"></div>
         </div>
+        <div class="card">
+          <div class="card-header">
+            <span class="card-header-title">Analítica de dashboards (uso por pestaña)</span>
+            <button class="btn btn-outline btn-sm" onclick="loadDashboardAnalytics()">↻ Actualizar</button>
+          </div>
+          <div id="metrics-dashboards"><div class="loading">Cargando analítica...</div></div>
+        </div>
       </div>
 
     </div>
@@ -854,7 +861,7 @@ function switchTab(tab, btn) {
   document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   if (tab === 'permissions') populatePermSelect();
-  if (tab === 'metrics') loadMetrics();
+  if (tab === 'metrics') { loadMetrics(); loadDashboardAnalytics(); }
 }
 
 /* ── REPORTS ── */
@@ -1203,7 +1210,7 @@ async function openUserReport(storagePath, name, reportId) {
   try {
     const url = await storage.ref(storagePath).getDownloadURL();
     const opts = mergeOpts(myAccessOptions[reportId]);
-    await openViewer(url, name, opts, currentUser && currentUser.email);
+    await openViewer(url, name, opts, currentUser && currentUser.email, reportId);
   } catch (err) {
     alert('Error al cargar el informe: ' + (err.message || err));
   } finally {
@@ -1260,7 +1267,7 @@ function hideLoadingOverlay() {
 ══════════════════════════════════════ */
 let _viewerCleanup = null;
 
-async function openViewer(url, name, opts, viewerEmail) {
+async function openViewer(url, name, opts, viewerEmail, reportId) {
   opts = mergeOpts(opts);
   const ext = extOf(name);
   const kind = fileKind(name);
@@ -1290,6 +1297,7 @@ async function openViewer(url, name, opts, viewerEmail) {
   try {
     if (kind === 'html') {
       content.innerHTML = `<iframe class="viewer-frame" src="${url}" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>`;
+      setupDashboardAnalytics(content.querySelector('iframe'), reportId, name);
     } else if (ext === 'pdf') {
       await renderPdf(url, content);
     } else if (ext === 'docx') {
@@ -1309,6 +1317,33 @@ function closeViewer() {
   teardownProtections();
   const v = document.getElementById('viewer');
   if (v) v.remove();
+}
+
+// Recibe los eventos de analítica que el dashboard (iframe) manda por postMessage
+// y los guarda en Firestore, atados al usuario / sesión / informe.
+// Solo se activa en vistas de cliente (reportId presente); la vista previa del admin no registra.
+function setupDashboardAnalytics(iframe, reportId, name) {
+  if (!reportId || !iframe || !currentUser) return;
+  const handler = (e) => {
+    const d = e.data;
+    if (!d || d.__portalAnalytics !== true) return;
+    if (e.source !== iframe.contentWindow) return;   // solo mensajes de ESTE iframe
+    if (d.event !== 'open' && d.event !== 'tab') return;
+    db.collection('dashboardEvents').add({
+      uid: currentUser.uid,
+      email: currentUser.email,
+      reportId: reportId,
+      reportName: name,
+      sessionId: currentSessionId || null,
+      event: d.event,
+      section: d.section || null,
+      dwellMs: (typeof d.dwellMs === 'number' && isFinite(d.dwellMs)) ? Math.max(0, Math.round(d.dwellMs)) : null,
+      at: firebase.firestore.FieldValue.serverTimestamp()
+    }).catch(() => {});
+  };
+  window.addEventListener('message', handler);
+  const prev = _viewerCleanup;   // encadenar al cierre del visor para remover el listener
+  _viewerCleanup = () => { if (prev) prev(); window.removeEventListener('message', handler); };
 }
 
 /* ── Protecciones (marca de agua, impresión, copia) ── */
@@ -1627,6 +1662,57 @@ function shortUA(ua) {
   else if (/iPhone|iPad|iPod/.test(ua)) os = 'iOS'; else if (/Mac OS/.test(ua)) os = 'macOS';
   else if (/Linux/.test(ua)) os = 'Linux';
   return os ? (b + ' · ' + os) : b;
+}
+
+/* ── Analítica de dashboards (uso por pestaña dentro de los informes HTML) ── */
+async function loadDashboardAnalytics() {
+  const cont = el('metrics-dashboards');
+  if (!cont) return;
+  cont.innerHTML = '<div class="loading">Cargando analítica...</div>';
+  let events = [];
+  try {
+    const snap = await db.collection('dashboardEvents').orderBy('at', 'desc').limit(3000).get();
+    events = snap.docs.map(d => d.data());
+  } catch (e) {
+    cont.innerHTML = emptyHTML('⚠️', 'No se pudo cargar la analítica.<br>¿Publicaste las reglas de Firestore para <b>dashboardEvents</b>?');
+    return;
+  }
+  if (!events.length) {
+    cont.innerHTML = emptyHTML('📈', 'Todavía no hay datos de uso.<br>Agregá el snippet de analítica a los dashboards (ver README).');
+    return;
+  }
+  // Agrupar por informe → sección
+  const byReport = {};
+  events.forEach(ev => {
+    const r = ev.reportName || ev.reportId || '—';
+    if (!byReport[r]) byReport[r] = { opens: 0, sections: {}, activity: 0 };
+    if (ev.event === 'open') { byReport[r].opens++; byReport[r].activity++; }
+    else if (ev.event === 'tab' && ev.section) {
+      const s = byReport[r].sections[ev.section] || (byReport[r].sections[ev.section] = { visits: 0, totalMs: 0 });
+      s.visits++; s.totalMs += (ev.dwellMs || 0);
+      byReport[r].activity++;
+    }
+  });
+  const reports = Object.keys(byReport).sort((a, b) => byReport[b].activity - byReport[a].activity);
+  cont.innerHTML = reports.map(r => {
+    const d = byReport[r];
+    const secs = Object.keys(d.sections).sort((a, b) => d.sections[b].visits - d.sections[a].visits);
+    const rowsHtml = secs.length ? secs.map(s => {
+      const x = d.sections[s];
+      return `<tr>
+        <td style="font-weight:600">${esc(s)}</td>
+        <td>${x.visits}</td>
+        <td>${fmtDur(x.totalMs)}</td>
+        <td style="color:var(--gray)">${fmtDur(x.visits ? Math.round(x.totalMs / x.visits) : 0)}</td>
+      </tr>`;
+    }).join('') : '<tr><td colspan="4" style="color:var(--gray)">Sin datos de pestañas (el dashboard no envió secciones).</td></tr>';
+    return `<div style="padding:1rem 1.5rem;border-bottom:1px solid var(--border)">
+      <div style="font-weight:700;color:var(--dark);margin-bottom:.6rem">📊 ${esc(r)} · <span style="color:var(--gray);font-weight:600">${d.opens} apertura(s)</span></div>
+      <div style="overflow-x:auto"><table>
+        <thead><tr><th>Pestaña / sección</th><th>Visitas</th><th>Tiempo total</th><th>Tiempo prom.</th></tr></thead>
+        <tbody>${rowsHtml}</tbody></table></div>
+    </div>`;
+  }).join('');
 }
 
 /* ── HELPERS ── */

@@ -44,5 +44,12 @@ service cloud.firestore {
       allow update: if isAuth() && resource.data.uid == request.auth.uid;
       allow read:   if isAdmin();
     }
+
+    // ── Colección: dashboardEvents (analítica de uso dentro de los informes) ──
+    // Cada usuario crea sus propios eventos; solo el admin puede leerlos.
+    match /dashboardEvents/{eid} {
+      allow create: if isAuth() && request.resource.data.uid == request.auth.uid;
+      allow read:   if isAdmin();
+    }
   }
 }
