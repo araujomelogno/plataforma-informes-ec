@@ -165,7 +165,7 @@ Sí, siempre que sean recursos inline o URLs absolutas externas. Recursos relati
 
 ## 📄 Formatos soportados y visor
 
-El administrador puede subir **HTML, PDF, Word (.doc/.docx) y PowerPoint (.ppt/.pptx)**.
+El administrador puede subir **HTML, PDF, Word (.doc/.docx), PowerPoint (.ppt/.pptx) y video (.mp4/.webm/.mov/.m4v/.ogg)**.
 El cliente los ve **inline** (dentro del portal), renderizados en su propio navegador:
 
 | Formato | Cómo se muestra |
@@ -174,9 +174,12 @@ El cliente los ve **inline** (dentro del portal), renderizados en su propio nave
 | Word `.docx` | Renderizado con docx-preview |
 | PowerPoint `.pptx` | Renderizado con PPTXjs (la fidelidad puede variar en diapositivas complejas) |
 | HTML | En un `<iframe>` con sandbox |
+| **Video** (`.mp4`, `.webm`, `.mov`, …) | Reproductor `<video>` nativo, inline. Aplican las protecciones (marca de agua, bloqueo de descarga/clic derecho) |
 | `.doc` / `.ppt` (formatos viejos) | No se pueden previsualizar → se ofrece descarga. Convertí a `.docx`/`.pptx` o PDF |
 
-Las librerías de render se cargan desde CDN bajo demanda (solo cuando se abre un documento de ese tipo).
+Las librerías de render se cargan desde CDN bajo demanda (solo cuando se abre un documento de ese tipo). El video no usa librerías ni CORS.
+
+> ⚠️ **Video y plan gratuito (Spark):** los videos son pesados y el plan gratuito tiene topes ajustados — **1 GB/día de descarga** y **5 GB de almacenamiento** total. Con videos se llega rápido a esos límites; para uso intensivo conviene el plan **Blaze** (pago por uso). El formato más compatible es **MP4 (H.264)**.
 
 ---
 
