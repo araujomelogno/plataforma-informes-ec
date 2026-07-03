@@ -259,7 +259,7 @@
     }
     tr:last-child td { border-bottom: none; }
     tr:hover td { background: #FAFAFA; }
-    .td-actions { display: flex; gap: 0.4rem; align-items: center; }
+    .td-actions { display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; }
 
     /* ══════════════════════════════════════
        UPLOAD
@@ -1037,9 +1037,8 @@ async function loadUsers() {
 }
 
 function renderUsersTable() {
-  const nonAdmins = allUsers.filter(u => u.role !== 'admin');
-  el('users-count').textContent = nonAdmins.length;
-  if (!nonAdmins.length) {
+  el('users-count').textContent = allUsers.length;
+  if (!allUsers.length) {
     el('users-table').innerHTML = emptyHTML('👤', 'No hay usuarios registrados aún');
     return;
   }
@@ -1047,18 +1046,47 @@ function renderUsersTable() {
     <table>
       <thead><tr><th>Email</th><th>Rol</th><th>Creado</th><th>Acciones</th></tr></thead>
       <tbody>
-        ${nonAdmins.map(u => `
+        ${allUsers.map(u => {
+          const isAdmin = u.role === 'admin';
+          const isSelf  = currentUser && u.id === currentUser.uid;
+          const roleBtn = isAdmin
+            ? `<button class="btn btn-outline btn-sm" ${isSelf ? 'disabled title="No podés quitarte el admin a vos mismo"' : `onclick="changeRole('${u.id}','${esc(u.email)}','user')"`}>⬇ Quitar admin</button>`
+            : `<button class="btn btn-orange btn-sm" onclick="changeRole('${u.id}','${esc(u.email)}','admin')">⬆ Hacer admin</button>`;
+          const permBtn = isAdmin ? '' :
+            `<button class="btn btn-outline btn-sm" onclick="goToUserPerms('${u.id}')">🔐 Permisos</button>`;
+          return `
         <tr>
           <td style="font-weight:600">${esc(u.email)}</td>
-          <td><span class="badge badge-user">${u.role}</span></td>
+          <td><span class="badge ${isAdmin ? 'badge-admin' : 'badge-user'}">${isAdmin ? 'admin' : 'usuario'}</span></td>
           <td style="color:var(--gray)">${fmtDate(u.createdAt)}</td>
           <td><div class="td-actions">
-            <button class="btn btn-outline btn-sm" onclick="goToUserPerms('${u.id}')">🔐 Permisos</button>
+            ${permBtn}
             <button class="btn btn-outline btn-sm" onclick="showUserAccess('${u.id}','${esc(u.email)}')">👁 Accesos</button>
+            ${roleBtn}
           </div></td>
-        </tr>`).join('')}
+        </tr>`;
+        }).join('')}
       </tbody>
     </table>`;
+}
+
+async function changeRole(uid, email, newRole) {
+  if (currentUser && uid === currentUser.uid && newRole !== 'admin') {
+    alert('No podés quitarte el rol de admin a vos mismo.');
+    return;
+  }
+  const msg = newRole === 'admin'
+    ? `¿Convertir a "${email}" en ADMINISTRADOR?\n\nUn admin puede ver y administrar todos los informes, usuarios y métricas.`
+    : `¿Quitarle el rol de admin a "${email}" y dejarlo como usuario común?`;
+  if (!confirm(msg)) return;
+  try {
+    await db.collection('users').doc(uid).update({ role: newRole });
+    await loadUsers();
+    renderUsersTable();
+    populatePermSelect();   // el selector de permisos lista solo usuarios no-admin
+  } catch (e) {
+    alert('No se pudo cambiar el rol: ' + (e.message || e));
+  }
 }
 
 async function createUser() {
