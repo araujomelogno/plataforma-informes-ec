@@ -347,6 +347,8 @@
       background: var(--gray-xlight);
     }
     .viewer-frame { border: none; width: 100%; height: 100%; background: #fff; display: block; }
+    .video-wrap { display: flex; align-items: center; justify-content: center; height: 100%; padding: 16px; box-sizing: border-box; }
+    .viewer-video { max-width: 100%; max-height: 100%; background: #000; border-radius: 4px; }
     /* Marca de agua: mosaico diagonal fijo sobre el contenido, no intercepta clics */
     .wm-overlay { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
     /* Bloqueo de selección / clic derecho */
@@ -616,9 +618,9 @@
               ondragleave="handleDragLeave(event)">
               <div class="upload-icon">📁</div>
               <p><strong>Hacé clic para subir</strong> o arrastrá archivos aquí</p>
-              <p class="hint">HTML, PDF, Word (.doc/.docx) y PowerPoint (.ppt/.pptx) · Podés subir varios a la vez</p>
+              <p class="hint">HTML, PDF, Word, PowerPoint y video (.mp4/.webm/.mov) · Podés subir varios a la vez</p>
             </div>
-            <input type="file" id="file-input" accept=".html,.htm,.pdf,.doc,.docx,.ppt,.pptx" multiple class="hidden" onchange="handleFileSelect(event)" />
+            <input type="file" id="file-input" accept=".html,.htm,.pdf,.doc,.docx,.ppt,.pptx,.mp4,.webm,.ogg,.ogv,.mov,.m4v" multiple class="hidden" onchange="handleFileSelect(event)" />
             <div id="upload-progress" class="hidden progress-wrap">
               <div class="progress-meta">
                 <span id="upload-status">Subiendo...</span>
@@ -1298,6 +1300,8 @@ async function openViewer(url, name, opts, viewerEmail, reportId) {
     if (kind === 'html') {
       content.innerHTML = `<iframe class="viewer-frame" src="${url}" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>`;
       setupDashboardAnalytics(content.querySelector('iframe'), reportId, name);
+    } else if (kind === 'video') {
+      renderVideo(url, content, opts);
     } else if (ext === 'pdf') {
       await renderPdf(url, content);
     } else if (ext === 'docx') {
@@ -1384,6 +1388,19 @@ async function fetchBytes(url) {
   const r = await fetch(url);
   if (!r.ok) throw new Error('HTTP ' + r.status);
   return await r.arrayBuffer();
+}
+function renderVideo(url, content, opts) {
+  // Reproducción nativa e inline. Sin librerías ni CORS (como el iframe).
+  // Con descarga bloqueada: se oculta el botón de descarga de los controles y
+  // el clic derecho (a nivel del visor). Es disuasivo, no infalible.
+  const noDl = opts && opts.noDownload
+    ? ' controlsList="nodownload noremoteplayback" disablepictureinpicture oncontextmenu="return false"'
+    : '';
+  content.innerHTML = `<div class="video-wrap">
+    <video class="viewer-video" src="${url}" controls playsinline preload="metadata"${noDl}>
+      Tu navegador no puede reproducir este video.
+    </video>
+  </div>`;
 }
 async function renderPdf(url, content) {
   await loadScript(LIB.pdf);
@@ -1722,12 +1739,14 @@ const on  = (id, ev, fn) => el(id)?.addEventListener(ev, fn);
 const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
 /* ── ARCHIVOS: tipos soportados ── */
-const ALLOWED_EXT = ['html','htm','pdf','doc','docx','ppt','pptx'];
+const VIDEO_EXT = ['mp4','webm','ogg','ogv','mov','m4v'];
+const ALLOWED_EXT = ['html','htm','pdf','doc','docx','ppt','pptx'].concat(VIDEO_EXT);
 function extOf(name)   { const m = String(name).toLowerCase().match(/\.([a-z0-9]+)$/); return m ? m[1] : ''; }
 function isAllowed(name){ return ALLOWED_EXT.includes(extOf(name)); }
 function fileKind(name) {
   const e = extOf(name);
   if (e === 'pdf') return 'pdf';
+  if (VIDEO_EXT.includes(e)) return 'video';
   if (['doc','docx','ppt','pptx'].includes(e)) return 'office';
   return 'html'; // .html/.htm y desconocidos: se muestran como HTML (compatibilidad con informes previos)
 }
@@ -1736,6 +1755,7 @@ function fileIcon(name) {
   if (e === 'pdf')                return '📕';
   if (e === 'doc' || e === 'docx') return '📘';
   if (e === 'ppt' || e === 'pptx') return '📙';
+  if (VIDEO_EXT.includes(e))       return '🎬';
   return '🌐'; // HTML
 }
 function guessContentType(name) {
@@ -1744,7 +1764,9 @@ function guessContentType(name) {
     doc:'application/msword',
     docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     ppt:'application/vnd.ms-powerpoint',
-    pptx:'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+    pptx:'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    mp4:'video/mp4', m4v:'video/mp4', webm:'video/webm',
+    ogg:'video/ogg', ogv:'video/ogg', mov:'video/quicktime'
   })[extOf(name)] || 'application/octet-stream';
 }
 
