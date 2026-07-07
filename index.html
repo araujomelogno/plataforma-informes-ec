@@ -669,6 +669,26 @@
         </div>
 
         <div class="card">
+          <div class="card-header"><span class="card-header-title">Importar usuarios desde Excel</span></div>
+          <div class="card-body">
+            <div id="user-import-alert"></div>
+            <p style="font-size:0.78rem; color:var(--gray); margin-bottom:0.9rem; font-weight:500">
+              Subí un archivo <strong>.xlsx</strong>, <strong>.xls</strong> o <strong>.csv</strong> con dos columnas:
+              <strong>email</strong> (1ª columna) y <strong>contraseña</strong> (2ª columna, mínimo 6 caracteres).
+              La primera fila puede ser el encabezado (se detecta y omite).
+            </p>
+            <div class="two-col">
+              <div class="form-group" style="margin:0">
+                <label>Archivo</label>
+                <input type="file" id="user-import-file" accept=".xlsx,.xls,.csv" />
+              </div>
+              <button class="btn btn-orange" id="user-import-btn" onclick="importUsers()">⬆ Importar</button>
+            </div>
+            <div id="user-import-progress" class="hidden" style="margin-top:0.9rem"></div>
+          </div>
+        </div>
+
+        <div class="card">
           <div class="card-header">
             <span class="card-header-title">Usuarios registrados</span>
             <span class="count-chip" id="users-count">0</span>
@@ -705,7 +725,23 @@
           <p>Quién ingresa, cuántas veces, por cuánto tiempo y desde qué IP</p>
         </div>
         <div class="card">
-          <div class="card-header"><span class="card-header-title">Resumen por usuario</span></div>
+          <div class="card-header">
+            <span class="card-header-title">Resumen por usuario</span>
+            <button class="btn btn-outline btn-sm" onclick="loadMetrics()">↻ Actualizar</button>
+          </div>
+          <div class="card-body" style="padding-bottom:0.5rem">
+            <div class="metrics-filter">
+              <div class="form-group" style="margin:0">
+                <label>Desde</label>
+                <input type="date" id="metrics-sum-from" onchange="renderUserSummary()" />
+              </div>
+              <div class="form-group" style="margin:0">
+                <label>Hasta</label>
+                <input type="date" id="metrics-sum-to" onchange="renderUserSummary()" />
+              </div>
+              <button class="btn btn-outline btn-sm" onclick="clearSummaryFilter()">Limpiar</button>
+            </div>
+          </div>
           <div id="metrics-summary"><div class="loading">Cargando métricas...</div></div>
         </div>
         <div class="card">
@@ -798,21 +834,22 @@ let currentUser = null, currentUserData = null;
 let allReports = [], allUsers = [];
 let myAccessOptions = {};   // opciones de protección del usuario actual: { reportId: {watermark,noPrint,...} }
 let currentSessionId = null, _hbTimer = null, _sessionStarting = false;   // métricas de acceso
+let _loginNotice = null;   // aviso a mostrar en la pantalla de login (ej. acceso denegado)
 
 /* ── AUTH ── */
 auth.onAuthStateChanged(async (user) => {
   if (user) {
-    currentUser = user;
     const snap = await db.collection('users').doc(user.uid).get();
-    if (snap.exists) {
-      currentUserData = snap.data();
-    } else {
-      currentUserData = { email: user.email, role: 'user' };
-      await db.collection('users').doc(user.uid).set({
-        email: user.email, role: 'user',
-        createdAt: firebase.firestore.FieldValue.serverTimestamp()
-      });
+    if (!snap.exists) {
+      // Autenticado pero sin registro en el portal: fue borrado por un admin
+      // o nunca se le dio acceso. No recreamos el doc ni lo dejamos entrar.
+      _loginNotice = '⛔ Tu cuenta no tiene acceso al portal. Contactá al administrador.';
+      currentUser = null; currentUserData = null;
+      await auth.signOut();   // dispara de nuevo este listener con user=null → renderLogin()
+      return;
     }
+    currentUser = user;
+    currentUserData = snap.data();
     currentUserData.role === 'admin' ? renderAdmin() : renderUser();
     startSession();   // registra el acceso (una vez por carga autenticada)
   } else {
@@ -838,6 +875,7 @@ function renderLogin() {
   inject('tpl-login');
   on('login-email', 'keydown', e => e.key === 'Enter' && doLogin());
   on('login-pass',  'keydown', e => e.key === 'Enter' && doLogin());
+  if (_loginNotice) { showAlert('login-alert', 'error', _loginNotice); _loginNotice = null; }
 }
 
 async function renderAdmin() {
@@ -1066,6 +1104,8 @@ function renderUsersTable() {
             : `<button class="btn btn-orange btn-sm" onclick="changeRole('${u.id}','${esc(u.email)}','admin')">⬆ Hacer admin</button>`;
           const permBtn = isAdmin ? '' :
             `<button class="btn btn-outline btn-sm" onclick="goToUserPerms('${u.id}')">🔐 Permisos</button>`;
+          const delBtn = isSelf ? '' :
+            `<button class="btn btn-danger btn-sm" onclick="deleteUser('${u.id}','${esc(u.email)}')">🗑 Borrar</button>`;
           return `
         <tr>
           <td style="font-weight:600">${esc(u.email)}</td>
@@ -1076,6 +1116,7 @@ function renderUsersTable() {
             <button class="btn btn-outline btn-sm" onclick="showUserAccess('${u.id}','${esc(u.email)}')">👁 Accesos</button>
             <button class="btn btn-outline btn-sm" onclick="resetUserPassword('${esc(u.email)}')">🔑 Restablecer contraseña</button>
             ${roleBtn}
+            ${delBtn}
           </div></td>
         </tr>`;
         }).join('')}
@@ -1102,31 +1143,128 @@ async function changeRole(uid, email, newRole) {
   }
 }
 
+// Crea la cuenta de autenticación (sin cerrar la sesión del admin, gracias a
+// returnSecureToken:false) y su documento en Firestore. Reutilizado por la
+// creación individual y por la importación masiva.
+async function provisionUser(email, pass) {
+  const res = await fetch(
+    `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${firebaseConfig.apiKey}`,
+    { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ email, password: pass, returnSecureToken: false }) }
+  );
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.message);
+  await db.collection('users').doc(data.localId).set({
+    email, role: 'user',
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+  return data.localId;
+}
+
 async function createUser() {
   const email = v('new-user-email'), pass = v('new-user-pass');
   clearAlert('user-create-alert');
   if (!email || !pass)  return showAlert('user-create-alert','error','❌ Completá todos los campos');
   if (pass.length < 6)  return showAlert('user-create-alert','error','❌ La contraseña debe tener al menos 6 caracteres');
   try {
-    const res = await fetch(
-      `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${firebaseConfig.apiKey}`,
-      { method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ email, password: pass, returnSecureToken: false }) }
-    );
-    const data = await res.json();
-    if (data.error) throw new Error(data.error.message);
-    await db.collection('users').doc(data.localId).set({
-      email, role: 'user',
-      createdAt: firebase.firestore.FieldValue.serverTimestamp()
-    });
+    await provisionUser(email, pass);
     showAlert('user-create-alert','success',`✅ Usuario "${email}" creado correctamente`);
     el('new-user-email').value = '';
     el('new-user-pass').value  = '';
     await loadUsers(); renderUsersTable(); populatePermSelect();
   } catch (err) {
-    const msg = err.message.includes('EMAIL_EXISTS') ? 'Ya existe un usuario con ese email' : 'Error al crear el usuario';
+    const msg = String(err.message || err).includes('EMAIL_EXISTS') ? 'Ya existe un usuario con ese email' : 'Error al crear el usuario';
     showAlert('user-create-alert','error','❌ ' + msg);
   }
+}
+
+// Carga SheetJS bajo demanda (solo cuando el admin importa un archivo).
+let _xlsxLoader = null;
+function loadXLSX() {
+  if (window.XLSX) return Promise.resolve(window.XLSX);
+  if (_xlsxLoader) return _xlsxLoader;
+  _xlsxLoader = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+    s.onload  = () => window.XLSX ? resolve(window.XLSX) : reject(new Error('No se pudo cargar la librería de Excel'));
+    s.onerror = () => { _xlsxLoader = null; reject(new Error('No se pudo descargar la librería para leer Excel (revisá tu conexión)')); };
+    document.head.appendChild(s);
+  });
+  return _xlsxLoader;
+}
+
+async function importUsers() {
+  clearAlert('user-import-alert');
+  const fileInput = el('user-import-file');
+  const file = fileInput && fileInput.files && fileInput.files[0];
+  if (!file) return showAlert('user-import-alert','error','❌ Elegí un archivo primero');
+
+  const btn = el('user-import-btn');
+  const prog = el('user-import-progress');
+  btn.disabled = true;
+  prog.classList.remove('hidden');
+  prog.innerHTML = '<div class="loading">Leyendo archivo...</div>';
+
+  // 1) Leer y parsear el archivo → array de filas
+  let rows;
+  try {
+    const XLSX = await loadXLSX();
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: 'array' });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    rows = XLSX.utils.sheet_to_json(ws, { header: 1, blankrows: false, defval: '' });
+  } catch (e) {
+    btn.disabled = false; prog.classList.add('hidden');
+    return showAlert('user-import-alert','error','❌ ' + (e.message || 'No se pudo leer el archivo'));
+  }
+
+  // 2) Extraer pares email / contraseña (col 1 y col 2), omitiendo encabezado
+  const pairs = [];
+  (rows || []).forEach(r => {
+    if (!r || !r.length) return;
+    const email = String(r[0] ?? '').trim();
+    const pass  = String(r[1] ?? '').trim();
+    if (!email) return;
+    if (/^(e-?mail|correo)/i.test(email)) return;   // fila de encabezado
+    pairs.push({ email, pass });
+  });
+
+  if (!pairs.length) {
+    btn.disabled = false; prog.classList.add('hidden');
+    return showAlert('user-import-alert','error','❌ No se encontraron datos. Verificá que el email esté en la 1ª columna y la contraseña en la 2ª.');
+  }
+
+  // 3) Crear cada usuario, de a uno, con reporte de resultados
+  const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  const ok = [], exists = [], invalid = [], errored = [];
+  for (let i = 0; i < pairs.length; i++) {
+    const { email, pass } = pairs[i];
+    prog.innerHTML = `<div class="loading">Procesando ${i + 1} de ${pairs.length}: ${esc(email)}...</div>`;
+    if (!emailRe.test(email))     { invalid.push(`${email} — email inválido`); continue; }
+    if (pass.length < 6)          { invalid.push(`${email} — contraseña de menos de 6 caracteres`); continue; }
+    try {
+      await provisionUser(email, pass);
+      ok.push(email);
+    } catch (err) {
+      const m = String(err.message || err);
+      if (m.includes('EMAIL_EXISTS'))        exists.push(email);
+      else if (m.includes('INVALID_EMAIL'))  invalid.push(`${email} — email inválido`);
+      else if (m.includes('WEAK_PASSWORD'))  invalid.push(`${email} — contraseña débil`);
+      else                                   errored.push(`${email} — ${m}`);
+    }
+  }
+
+  await loadUsers(); renderUsersTable(); populatePermSelect();
+  fileInput.value = '';
+  prog.classList.add('hidden');
+  btn.disabled = false;
+
+  // 4) Resumen
+  let html = `<strong>Importación finalizada.</strong><br>✅ Creados: ${ok.length} de ${pairs.length}`;
+  if (exists.length)  html += `<br>⏭ Ya existían (${exists.length}): ${esc(exists.join(', '))}`;
+  if (invalid.length) html += `<br>⚠ Omitidos (${invalid.length}): ${esc(invalid.join(', '))}`;
+  if (errored.length) html += `<br>❌ Errores (${errored.length}): ${esc(errored.join(', '))}`;
+  showAlert('user-import-alert', ok.length ? 'success' : 'error', html);
 }
 
 async function resetUserPassword(email) {
@@ -1141,6 +1279,24 @@ async function resetUserPassword(email) {
     if (code === 'auth/invalid-email')   msg = 'El email no es válido.';
     if (code === 'auth/too-many-requests') msg = 'Demasiados intentos. Esperá unos minutos e intentá de nuevo.';
     alert('❌ No se pudo enviar el correo de restablecimiento: ' + msg);
+  }
+}
+
+async function deleteUser(uid, email) {
+  if (currentUser && uid === currentUser.uid) { alert('No podés borrarte a vos mismo.'); return; }
+  const msg = `¿Borrar al usuario "${email}"?\n\n` +
+    `Se eliminará su registro y todos sus permisos de acceso a informes. No podrá volver a ingresar al portal.\n\n` +
+    `⚠ Su credencial (email/contraseña) queda en Firebase Authentication. Para eliminarla por completo — y poder reutilizar ese email — borrala también en Firebase Console → Authentication.\n\n` +
+    `Esta acción no se puede deshacer.`;
+  if (!confirm(msg)) return;
+  try {
+    await db.collection('userAccess').doc(uid).delete().catch(() => {});
+    await db.collection('users').doc(uid).delete();
+    await loadUsers();
+    renderUsersTable();
+    populatePermSelect();
+  } catch (e) {
+    alert('No se pudo borrar el usuario: ' + (e.message || e));
   }
 }
 
@@ -1604,28 +1760,60 @@ async function loadMetrics() {
     return;
   }
 
-  // Resumen por usuario (sobre todas las sesiones, sin filtro de fechas)
+  renderUserSummary();     // resumen por usuario (respeta su propio rango de fechas)
+  renderSessionsTable();   // detalle de sesiones (respeta el rango de fechas)
+}
+
+// Renderiza el "Resumen por usuario" aplicando su propio filtro Desde/Hasta.
+// La columna "IPs" lista TODAS las IPs distintas usadas en el rango (más
+// reciente primero), en lugar de solo la última.
+function renderUserSummary() {
+  const sumEl = el('metrics-summary');
+  if (!sumEl) return;
+
+  const fromV = el('metrics-sum-from') && el('metrics-sum-from').value;
+  const toV   = el('metrics-sum-to')   && el('metrics-sum-to').value;
+  const from = fromV ? new Date(fromV + 'T00:00:00').getTime() : null;
+  const to   = toV   ? new Date(toV   + 'T23:59:59').getTime() : null;
+
+  let list = _allSessions;
+  if (from) list = list.filter(s => tsMs(s.startAt) >= from);
+  if (to)   list = list.filter(s => tsMs(s.startAt) <= to);
+
+  if (!list.length) { sumEl.innerHTML = emptyHTML('🔎', 'No hay accesos en ese rango de fechas.'); return; }
+
   const byUser = {};
-  _allSessions.forEach(s => {
+  list.forEach(s => {
     const k = s.email || s.uid;
-    if (!byUser[k]) byUser[k] = { email: k, count: 0, total: 0, last: 0, lastIp: '—' };
+    if (!byUser[k]) byUser[k] = { email: k, count: 0, total: 0, last: 0, ips: {} };
     byUser[k].count++;
     byUser[k].total += sessionDuration(s);
     const st = tsMs(s.startAt);
-    if (st && st > byUser[k].last) { byUser[k].last = st; byUser[k].lastIp = s.ip || '—'; }
+    if (st && st > byUser[k].last) byUser[k].last = st;
+    const ip = (s.ip || '').trim();
+    if (ip && (!byUser[k].ips[ip] || st > byUser[k].ips[ip])) byUser[k].ips[ip] = st;
   });
+
   const rows = Object.values(byUser).sort((a, b) => b.last - a.last);
   sumEl.innerHTML = `<div style="overflow-x:auto"><table>
-    <thead><tr><th>Usuario</th><th>Accesos</th><th>Tiempo total</th><th>Último acceso</th><th>Última IP</th></tr></thead>
-    <tbody>${rows.map(u => `<tr>
-      <td style="font-weight:600">${esc(u.email)}</td>
-      <td>${u.count}</td>
-      <td>${fmtDur(u.total)}</td>
-      <td style="color:var(--gray)">${u.last ? fmtDateTime(u.last) : '—'}</td>
-      <td style="color:var(--gray)">${esc(u.lastIp)}</td>
-    </tr>`).join('')}</tbody></table></div>`;
+    <thead><tr><th>Usuario</th><th>Accesos</th><th>Tiempo total</th><th>Último acceso</th><th>IPs</th></tr></thead>
+    <tbody>${rows.map(u => {
+      const ips = Object.keys(u.ips).sort((a, b) => u.ips[b] - u.ips[a]);
+      const ipsHtml = ips.length ? ips.map(esc).join('<br>') : '—';
+      return `<tr>
+        <td style="font-weight:600">${esc(u.email)}</td>
+        <td>${u.count}</td>
+        <td>${fmtDur(u.total)}</td>
+        <td style="color:var(--gray)">${u.last ? fmtDateTime(u.last) : '—'}</td>
+        <td style="color:var(--gray)">${ipsHtml}</td>
+      </tr>`;
+    }).join('')}</tbody></table></div>`;
+}
 
-  renderSessionsTable();   // detalle de sesiones (respeta el rango de fechas)
+function clearSummaryFilter() {
+  if (el('metrics-sum-from')) el('metrics-sum-from').value = '';
+  if (el('metrics-sum-to'))   el('metrics-sum-to').value = '';
+  renderUserSummary();
 }
 
 // Renderiza la tabla de sesiones recientes aplicando el filtro Desde/Hasta.
