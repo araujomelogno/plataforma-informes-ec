@@ -869,8 +869,14 @@ function switchTab(tab, btn) {
 /* ── REPORTS ── */
 async function loadReports() {
   try {
-    const snap = await db.collection('reports').orderBy('createdAt','desc').get();
+    // Traemos TODOS los informes sin orderBy: Firestore excluye de una consulta
+    // ordenada los documentos que no tengan el campo (por ej. informes subidos
+    // antes de que existiera 'createdAt'), y así no se veían todos.
+    const snap = await db.collection('reports').get();
     allReports = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    // Orden por fecha de creación descendente, resuelto en el cliente.
+    const ms = ts => (ts && ts.toMillis) ? ts.toMillis() : 0;
+    allReports.sort((a, b) => ms(b.createdAt) - ms(a.createdAt));
   } catch { allReports = []; }
 }
 
