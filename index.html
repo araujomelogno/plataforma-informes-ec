@@ -725,7 +725,23 @@
           <p>Quién ingresa, cuántas veces, por cuánto tiempo y desde qué IP</p>
         </div>
         <div class="card">
-          <div class="card-header"><span class="card-header-title">Resumen por usuario</span></div>
+          <div class="card-header">
+            <span class="card-header-title">Resumen por usuario</span>
+            <button class="btn btn-outline btn-sm" onclick="loadMetrics()">↻ Actualizar</button>
+          </div>
+          <div class="card-body" style="padding-bottom:0.5rem">
+            <div class="metrics-filter">
+              <div class="form-group" style="margin:0">
+                <label>Desde</label>
+                <input type="date" id="metrics-sum-from" onchange="renderUserSummary()" />
+              </div>
+              <div class="form-group" style="margin:0">
+                <label>Hasta</label>
+                <input type="date" id="metrics-sum-to" onchange="renderUserSummary()" />
+              </div>
+              <button class="btn btn-outline btn-sm" onclick="clearSummaryFilter()">Limpiar</button>
+            </div>
+          </div>
           <div id="metrics-summary"><div class="loading">Cargando métricas...</div></div>
         </div>
         <div class="card">
@@ -1744,28 +1760,60 @@ async function loadMetrics() {
     return;
   }
 
-  // Resumen por usuario (sobre todas las sesiones, sin filtro de fechas)
+  renderUserSummary();     // resumen por usuario (respeta su propio rango de fechas)
+  renderSessionsTable();   // detalle de sesiones (respeta el rango de fechas)
+}
+
+// Renderiza el "Resumen por usuario" aplicando su propio filtro Desde/Hasta.
+// La columna "IPs" lista TODAS las IPs distintas usadas en el rango (más
+// reciente primero), en lugar de solo la última.
+function renderUserSummary() {
+  const sumEl = el('metrics-summary');
+  if (!sumEl) return;
+
+  const fromV = el('metrics-sum-from') && el('metrics-sum-from').value;
+  const toV   = el('metrics-sum-to')   && el('metrics-sum-to').value;
+  const from = fromV ? new Date(fromV + 'T00:00:00').getTime() : null;
+  const to   = toV   ? new Date(toV   + 'T23:59:59').getTime() : null;
+
+  let list = _allSessions;
+  if (from) list = list.filter(s => tsMs(s.startAt) >= from);
+  if (to)   list = list.filter(s => tsMs(s.startAt) <= to);
+
+  if (!list.length) { sumEl.innerHTML = emptyHTML('🔎', 'No hay accesos en ese rango de fechas.'); return; }
+
   const byUser = {};
-  _allSessions.forEach(s => {
+  list.forEach(s => {
     const k = s.email || s.uid;
-    if (!byUser[k]) byUser[k] = { email: k, count: 0, total: 0, last: 0, lastIp: '—' };
+    if (!byUser[k]) byUser[k] = { email: k, count: 0, total: 0, last: 0, ips: {} };
     byUser[k].count++;
     byUser[k].total += sessionDuration(s);
     const st = tsMs(s.startAt);
-    if (st && st > byUser[k].last) { byUser[k].last = st; byUser[k].lastIp = s.ip || '—'; }
+    if (st && st > byUser[k].last) byUser[k].last = st;
+    const ip = (s.ip || '').trim();
+    if (ip && (!byUser[k].ips[ip] || st > byUser[k].ips[ip])) byUser[k].ips[ip] = st;
   });
+
   const rows = Object.values(byUser).sort((a, b) => b.last - a.last);
   sumEl.innerHTML = `<div style="overflow-x:auto"><table>
-    <thead><tr><th>Usuario</th><th>Accesos</th><th>Tiempo total</th><th>Último acceso</th><th>Última IP</th></tr></thead>
-    <tbody>${rows.map(u => `<tr>
-      <td style="font-weight:600">${esc(u.email)}</td>
-      <td>${u.count}</td>
-      <td>${fmtDur(u.total)}</td>
-      <td style="color:var(--gray)">${u.last ? fmtDateTime(u.last) : '—'}</td>
-      <td style="color:var(--gray)">${esc(u.lastIp)}</td>
-    </tr>`).join('')}</tbody></table></div>`;
+    <thead><tr><th>Usuario</th><th>Accesos</th><th>Tiempo total</th><th>Último acceso</th><th>IPs</th></tr></thead>
+    <tbody>${rows.map(u => {
+      const ips = Object.keys(u.ips).sort((a, b) => u.ips[b] - u.ips[a]);
+      const ipsHtml = ips.length ? ips.map(esc).join('<br>') : '—';
+      return `<tr>
+        <td style="font-weight:600">${esc(u.email)}</td>
+        <td>${u.count}</td>
+        <td>${fmtDur(u.total)}</td>
+        <td style="color:var(--gray)">${u.last ? fmtDateTime(u.last) : '—'}</td>
+        <td style="color:var(--gray)">${ipsHtml}</td>
+      </tr>`;
+    }).join('')}</tbody></table></div>`;
+}
 
-  renderSessionsTable();   // detalle de sesiones (respeta el rango de fechas)
+function clearSummaryFilter() {
+  if (el('metrics-sum-from')) el('metrics-sum-from').value = '';
+  if (el('metrics-sum-to'))   el('metrics-sum-to').value = '';
+  renderUserSummary();
 }
 
 // Renderiza la tabla de sesiones recientes aplicando el filtro Desde/Hasta.
