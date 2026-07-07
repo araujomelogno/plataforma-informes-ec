@@ -1031,8 +1031,14 @@ async function previewReport(storagePath, name) {
 /* ── USERS ── */
 async function loadUsers() {
   try {
-    const snap = await db.collection('users').orderBy('createdAt','desc').get();
+    // Traemos TODOS los usuarios sin orderBy: Firestore excluye de una consulta
+    // ordenada los documentos que no tengan el campo (por ej. usuarios creados
+    // antes de que existiera 'createdAt'), y así no se veían todos.
+    const snap = await db.collection('users').get();
     allUsers = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    // Orden por fecha de creación descendente, resuelto en el cliente.
+    const ms = ts => (ts && ts.toMillis) ? ts.toMillis() : 0;
+    allUsers.sort((a, b) => ms(b.createdAt) - ms(a.createdAt));
   } catch { allUsers = []; }
 }
 
@@ -1062,6 +1068,7 @@ function renderUsersTable() {
           <td><div class="td-actions">
             ${permBtn}
             <button class="btn btn-outline btn-sm" onclick="showUserAccess('${u.id}','${esc(u.email)}')">👁 Accesos</button>
+            <button class="btn btn-outline btn-sm" onclick="resetUserPassword('${esc(u.email)}')">🔑 Restablecer contraseña</button>
             ${roleBtn}
           </div></td>
         </tr>`;
@@ -1113,6 +1120,21 @@ async function createUser() {
   } catch (err) {
     const msg = err.message.includes('EMAIL_EXISTS') ? 'Ya existe un usuario con ese email' : 'Error al crear el usuario';
     showAlert('user-create-alert','error','❌ ' + msg);
+  }
+}
+
+async function resetUserPassword(email) {
+  if (!confirm(`¿Enviar un correo para restablecer la contraseña de "${email}"?\n\nEl usuario recibirá un enlace por email para elegir una contraseña nueva.`)) return;
+  try {
+    await auth.sendPasswordResetEmail(email);
+    alert(`✅ Se envió a "${email}" un correo con el enlace para restablecer su contraseña.\n\nRevisá también la carpeta de spam si no llega en unos minutos.`);
+  } catch (err) {
+    const code = (err && err.code) || '';
+    let msg = err.message || err;
+    if (code === 'auth/user-not-found')  msg = 'No existe una cuenta de autenticación con ese email.';
+    if (code === 'auth/invalid-email')   msg = 'El email no es válido.';
+    if (code === 'auth/too-many-requests') msg = 'Demasiados intentos. Esperá unos minutos e intentá de nuevo.';
+    alert('❌ No se pudo enviar el correo de restablecimiento: ' + msg);
   }
 }
 
