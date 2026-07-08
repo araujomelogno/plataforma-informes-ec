@@ -31,11 +31,20 @@ service cloud.firestore {
     // ── Colección: publicLinks (enlaces públicos a informes) ──
     // Lectura ABIERTA a cualquiera (sin login): así el enlace público funciona
     // desde cualquier navegador. El documento solo guarda la URL de descarga
-    // (ya pública por su token) y el nombre del informe. Solo el admin crea o
-    // elimina estos enlaces.
+    // (ya pública por su token) y el nombre del informe.
+    // Crear / eliminar: solo el admin.
+    // Actualizar: el admin puede todo; un visitante anónimo SOLO puede sumar 1
+    // al contador de accesos y refrescar la fecha del último acceso (no puede
+    // tocar la URL, el nombre ni desactivar el enlace).
     match /publicLinks/{token} {
-      allow read:  if true;
-      allow write: if isAdmin();
+      allow read:   if true;
+      allow create: if isAdmin();
+      allow delete: if isAdmin();
+      allow update: if isAdmin() || (
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['hitCount', 'lastAccessAt']) &&
+        request.resource.data.hitCount == resource.data.get('hitCount', 0) + 1
+      );
     }
 
     // ── Colección: userAccess ──

@@ -896,6 +896,13 @@ async function renderPublicView(token) {
     return showPublicMessage('⚠️', 'No se pudo cargar',
       'Ocurrió un error al abrir el informe. Intentá de nuevo más tarde.');
   }
+  // Registro liviano del acceso público: contador + fecha del último acceso.
+  // Fire-and-forget: no bloquea la apertura del informe si falla.
+  db.collection('publicLinks').doc(token).update({
+    hitCount: firebase.firestore.FieldValue.increment(1),
+    lastAccessAt: firebase.firestore.FieldValue.serverTimestamp()
+  }).catch(() => {});
+
   const l = document.getElementById('public-loading'); if (l) l.remove();
   // Sin marca de agua ni restricciones: es una vista pública explícita.
   await openViewer(data.url, data.name || 'Informe',
@@ -1143,9 +1150,25 @@ function randomToken() {
 function publicLinkUrl(token) { return `${location.origin}/?p=${token}`; }
 
 // Abre el diálogo de gestión del enlace público de un informe.
-function managePublicLink(reportId, storagePath, name) {
+async function managePublicLink(reportId, storagePath, name) {
   const r = allReports.find(x => x.id === reportId) || {};
-  openLinkModal(publicLinkModalBody(reportId, storagePath, name, r.publicToken || null));
+  const token = r.publicToken || null;
+  openLinkModal(publicLinkModalBody(reportId, storagePath, name, token));
+  if (token) {
+    try {
+      const snap = await db.collection('publicLinks').doc(token).get();
+      const d = snap.exists ? snap.data() : {};
+      fillLinkStats(d.hitCount, d.lastAccessAt);
+    } catch { fillLinkStats(0, null); }
+  }
+}
+
+// Rellena el bloque de estadísticas del diálogo (accesos + último acceso).
+function fillLinkStats(count, lastAccessTs) {
+  const box = el('public-link-stats'); if (!box) return;
+  const n = count || 0;
+  const last = lastAccessTs ? fmtDateTime(tsMs(lastAccessTs)) : '—';
+  box.innerHTML = `👁 <b>${n}</b> ${n === 1 ? 'acceso' : 'accesos'} · último: ${last}`;
 }
 
 function publicLinkModalBody(reportId, storagePath, name, token) {
@@ -1161,6 +1184,9 @@ function publicLinkModalBody(reportId, storagePath, name, token) {
           style="flex:1;min-width:220px;padding:.55rem .7rem;border:1px solid #ddd;border-radius:8px;font-size:.82rem" />
         <button class="btn btn-orange btn-sm" onclick="copyPublicLink()">📋 Copiar</button>
         <a class="btn btn-outline btn-sm" href="${esc(url)}" target="_blank" rel="noopener">↗ Abrir</a>
+      </div>
+      <div id="public-link-stats" style="margin-top:.9rem;font-size:.82rem;color:var(--gray);font-weight:500">
+        Cargando estadísticas…
       </div>
       <div style="margin-top:1.1rem;border-top:1px solid #eee;padding-top:.9rem">
         <button class="btn btn-danger btn-sm" onclick="revokePublicLink('${reportId}')">🚫 Desactivar enlace</button>
@@ -1182,13 +1208,14 @@ async function generatePublicLink(reportId, storagePath, name) {
     const url = await storage.ref(storagePath).getDownloadURL();
     const token = randomToken();
     await db.collection('publicLinks').doc(token).set({
-      reportId, name, url, enabled: true,
+      reportId, name, url, enabled: true, hitCount: 0,
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     });
     await db.collection('reports').doc(reportId).update({ publicToken: token });
     const r = allReports.find(x => x.id === reportId); if (r) r.publicToken = token;
     renderReportsTable();
     setLinkModalBody(publicLinkModalBody(reportId, storagePath, name, token));
+    fillLinkStats(0, null);
   } catch (e) {
     setLinkModalBody(`<div class="alert alert-error">❌ No se pudo generar el enlace: ${esc(e.message || String(e))}</div>`);
   }
