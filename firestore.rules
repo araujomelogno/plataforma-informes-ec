@@ -28,6 +28,16 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // ── Colección: publicLinks (enlaces públicos a informes) ──
+    // Lectura ABIERTA a cualquiera (sin login): así el enlace público funciona
+    // desde cualquier navegador. El documento solo guarda la URL de descarga
+    // (ya pública por su token) y el nombre del informe. Solo el admin crea o
+    // elimina estos enlaces.
+    match /publicLinks/{token} {
+      allow read:  if true;
+      allow write: if isAdmin();
+    }
+
     // ── Colección: userAccess ──
     // Cada usuario puede leer sus propios permisos.
     // Solo el admin puede escribir (asignar/quitar acceso).
