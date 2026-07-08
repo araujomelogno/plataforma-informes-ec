@@ -836,8 +836,14 @@ let myAccessOptions = {};   // opciones de protección del usuario actual: { rep
 let currentSessionId = null, _hbTimer = null, _sessionStarting = false;   // métricas de acceso
 let _loginNotice = null;   // aviso a mostrar en la pantalla de login (ej. acceso denegado)
 
+// ── Modo "enlace público" ──
+// Si la URL trae ?p=<token>, mostramos el informe sin login y sin tocar la app.
+const _publicToken = new URLSearchParams(location.search).get('p');
+let _publicMode = !!_publicToken;
+
 /* ── AUTH ── */
 auth.onAuthStateChanged(async (user) => {
+  if (_publicMode) return;   // en modo enlace público no renderizamos login ni app
   if (user) {
     const snap = await db.collection('users').doc(user.uid).get();
     if (!snap.exists) {
@@ -858,6 +864,55 @@ auth.onAuthStateChanged(async (user) => {
     renderLogin();
   }
 });
+
+// Arranque del modo enlace público (no requiere login).
+if (_publicMode) renderPublicView(_publicToken);
+
+// Muestra un informe compartido públicamente a partir de su token.
+// Usa overlays fijos apilados sobre la página (no toca el #root ni los
+// templates), de modo que funciona sin haber renderizado la app.
+async function renderPublicView(token) {
+  _publicMode = true;
+  document.title = 'Informe compartido';
+  const loading = document.createElement('div');
+  loading.id = 'public-loading';
+  loading.style.cssText = 'position:fixed;inset:0;z-index:90;display:flex;align-items:center;justify-content:center;background:#f7f7f8;color:#555;font-family:system-ui,Arial,sans-serif';
+  loading.innerHTML = `<div style="text-align:center"><div style="font-size:2rem;margin-bottom:.6rem">📄</div>Cargando informe…</div>`;
+  document.body.appendChild(loading);
+
+  let data;
+  try {
+    const snap = await db.collection('publicLinks').doc(token).get();
+    if (!snap.exists) {
+      return showPublicMessage('🔒', 'Enlace no disponible',
+        'Este enlace público no existe o fue desactivado por el administrador.');
+    }
+    data = snap.data();
+    if (data.enabled === false) {
+      return showPublicMessage('🔒', 'Enlace desactivado',
+        'Este enlace público fue desactivado por el administrador.');
+    }
+  } catch (e) {
+    return showPublicMessage('⚠️', 'No se pudo cargar',
+      'Ocurrió un error al abrir el informe. Intentá de nuevo más tarde.');
+  }
+  const l = document.getElementById('public-loading'); if (l) l.remove();
+  // Sin marca de agua ni restricciones: es una vista pública explícita.
+  await openViewer(data.url, data.name || 'Informe',
+    { watermark: false, noPrint: false, noDownload: false, noCopy: false }, null, null);
+}
+
+function showPublicMessage(icon, title, text) {
+  const l = document.getElementById('public-loading'); if (l) l.remove();
+  const m = document.createElement('div');
+  m.style.cssText = 'position:fixed;inset:0;z-index:95;display:flex;align-items:center;justify-content:center;padding:1.5rem;font-family:system-ui,Arial,sans-serif;background:#f7f7f8';
+  m.innerHTML = `<div style="max-width:440px;text-align:center;background:#fff;border:1px solid #eee;border-radius:14px;padding:2.4rem 2rem;box-shadow:0 6px 24px rgba(0,0,0,.06)">
+       <div style="font-size:2.6rem;margin-bottom:.8rem">${icon}</div>
+       <h1 style="font-size:1.15rem;margin:0 0 .5rem;color:#222">${esc(String(title))}</h1>
+       <p style="margin:0;color:#666;font-size:.9rem;line-height:1.5">${esc(String(text))}</p>
+     </div>`;
+  document.body.appendChild(m);
+}
 
 async function doLogin() {
   const email = v('login-email'), pass = v('login-pass');
@@ -935,6 +990,7 @@ function renderReportsTable() {
           <td style="color:var(--gray)">${fmtDate(r.createdAt)}</td>
           <td><div class="td-actions">
             <button class="btn btn-outline btn-sm" onclick="previewReport('${r.storagePath}','${esc(r.name)}')">👁 Ver</button>
+            <button class="btn btn-outline btn-sm" onclick="managePublicLink('${r.id}','${r.storagePath}','${esc(r.name)}')">${r.publicToken ? '🔗 Link público ✓' : '🔗 Link público'}</button>
             <button class="btn btn-danger btn-sm" onclick="deleteReport('${r.id}','${r.storagePath}')">🗑</button>
           </div></td>
         </tr>`).join('')}
@@ -1041,6 +1097,11 @@ async function uploadFiles(files) {
 async function deleteReport(id, storagePath) {
   if (!confirm('¿Eliminar este informe? Esta acción no se puede deshacer.')) return;
   try { await storage.ref(storagePath).delete(); } catch {}
+  // Si tenía un enlace público, lo desactivamos también.
+  const rep = allReports.find(x => x.id === id);
+  if (rep && rep.publicToken) {
+    try { await db.collection('publicLinks').doc(rep.publicToken).delete(); } catch {}
+  }
   await db.collection('reports').doc(id).delete();
   const snap = await db.collection('userAccess').get();
   const batch = db.batch();
@@ -1071,6 +1132,109 @@ async function previewReport(storagePath, name) {
     hideLoadingOverlay();
   }
 }
+
+/* ── ENLACES PÚBLICOS ── */
+// Token aleatorio para la URL pública (no adivinable).
+function randomToken() {
+  const a = new Uint8Array(16);
+  crypto.getRandomValues(a);
+  return Array.from(a, b => b.toString(16).padStart(2, '0')).join('');
+}
+function publicLinkUrl(token) { return `${location.origin}/?p=${token}`; }
+
+// Abre el diálogo de gestión del enlace público de un informe.
+function managePublicLink(reportId, storagePath, name) {
+  const r = allReports.find(x => x.id === reportId) || {};
+  openLinkModal(publicLinkModalBody(reportId, storagePath, name, r.publicToken || null));
+}
+
+function publicLinkModalBody(reportId, storagePath, name, token) {
+  if (token) {
+    const url = publicLinkUrl(token);
+    return `
+      <p style="font-size:.85rem;color:var(--gray);font-weight:500;margin:0 0 .85rem">
+        Cualquier persona con este enlace puede ver <b>${esc(name)}</b> desde cualquier navegador, sin iniciar sesión.
+      </p>
+      <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+        <input id="public-link-input" type="text" readonly value="${esc(url)}"
+          onclick="this.select()"
+          style="flex:1;min-width:220px;padding:.55rem .7rem;border:1px solid #ddd;border-radius:8px;font-size:.82rem" />
+        <button class="btn btn-orange btn-sm" onclick="copyPublicLink()">📋 Copiar</button>
+        <a class="btn btn-outline btn-sm" href="${esc(url)}" target="_blank" rel="noopener">↗ Abrir</a>
+      </div>
+      <div style="margin-top:1.1rem;border-top:1px solid #eee;padding-top:.9rem">
+        <button class="btn btn-danger btn-sm" onclick="revokePublicLink('${reportId}')">🚫 Desactivar enlace</button>
+      </div>`;
+  }
+  return `
+    <p style="font-size:.85rem;color:var(--gray);font-weight:500;margin:0 0 1rem">
+      Generá un enlace público para <b>${esc(name)}</b>. Cualquier persona con el enlace
+      podrá verlo desde cualquier navegador, <b>sin iniciar sesión</b>.
+    </p>
+    <button class="btn btn-orange" onclick="generatePublicLink('${reportId}','${storagePath}','${esc(name)}')">🔗 Generar enlace público</button>`;
+}
+
+async function generatePublicLink(reportId, storagePath, name) {
+  setLinkModalBody('<div class="loading">Generando enlace…</div>');
+  try {
+    // La URL de descarga de Storage ya es pública (lleva su propio token), por lo
+    // que sirve para verlo sin login. La guardamos en el doc del enlace.
+    const url = await storage.ref(storagePath).getDownloadURL();
+    const token = randomToken();
+    await db.collection('publicLinks').doc(token).set({
+      reportId, name, url, enabled: true,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    await db.collection('reports').doc(reportId).update({ publicToken: token });
+    const r = allReports.find(x => x.id === reportId); if (r) r.publicToken = token;
+    renderReportsTable();
+    setLinkModalBody(publicLinkModalBody(reportId, storagePath, name, token));
+  } catch (e) {
+    setLinkModalBody(`<div class="alert alert-error">❌ No se pudo generar el enlace: ${esc(e.message || String(e))}</div>`);
+  }
+}
+
+async function revokePublicLink(reportId) {
+  if (!confirm('¿Desactivar el enlace público? Dejará de funcionar para todos los que lo tengan.')) return;
+  const r = allReports.find(x => x.id === reportId) || {};
+  const token = r.publicToken;
+  try {
+    if (token) { try { await db.collection('publicLinks').doc(token).delete(); } catch {} }
+    await db.collection('reports').doc(reportId).update({ publicToken: firebase.firestore.FieldValue.delete() });
+    if (r) delete r.publicToken;
+    renderReportsTable();
+    closeLinkModal();
+  } catch (e) {
+    alert('No se pudo desactivar el enlace: ' + (e.message || e));
+  }
+}
+
+function copyPublicLink() {
+  const inp = el('public-link-input'); if (!inp) return;
+  inp.select();
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(inp.value).catch(() => { try { document.execCommand('copy'); } catch {} });
+  } else {
+    try { document.execCommand('copy'); } catch {}
+  }
+}
+
+function openLinkModal(bodyHtml) {
+  closeLinkModal();
+  const m = document.createElement('div');
+  m.className = 'modal-backdrop'; m.id = 'link-modal';
+  m.onclick = (e) => { if (e.target === m) closeLinkModal(); };
+  m.innerHTML = `<div class="modal-box">
+    <div class="modal-head">
+      <span class="modal-title">🔗 Enlace público</span>
+      <button class="btn btn-outline btn-sm" onclick="closeLinkModal()">✕ Cerrar</button>
+    </div>
+    <div class="modal-body" id="link-modal-body">${bodyHtml}</div>
+  </div>`;
+  document.body.appendChild(m);
+}
+function setLinkModalBody(html) { const b = el('link-modal-body'); if (b) b.innerHTML = html; }
+function closeLinkModal() { const m = el('link-modal'); if (m) m.remove(); }
 
 /* ── USERS ── */
 async function loadUsers() {
@@ -1494,9 +1658,14 @@ async function openViewer(url, name, opts, viewerEmail, reportId) {
   const dlLink = opts.noDownload ? '' :
     `<a href="${url}" target="_blank" rel="noopener" class="btn btn-outline-dark btn-sm">↗ Abrir / Descargar</a>`;
 
+  // En modo enlace público no hay "atrás": mostramos una etiqueta en su lugar.
+  const backBtn = _publicMode
+    ? `<span class="btn btn-outline-dark btn-sm" style="pointer-events:none;opacity:.75">🔗 Informe compartido</span>`
+    : `<button class="btn btn-outline-dark btn-sm" onclick="closeViewer()">← Volver</button>`;
+
   vw.innerHTML = `
     <div class="viewer-bar">
-      <button class="btn btn-outline-dark btn-sm" onclick="closeViewer()">← Volver</button>
+      ${backBtn}
       <div class="viewer-title">${fileIcon(name)} ${esc(name)}</div>
       ${dlLink}
     </div>
