@@ -284,4 +284,45 @@ Cómo funciona: el dashboard (dentro del iframe) manda eventos por `postMessage`
 > Requiere publicar el `firestore.rules` actualizado (colección `dashboardEvents`). Solo el admin lee la analítica. Cada cambio de pestaña genera 1 escritura en Firestore (despreciable para uso interno).
 
 ---
+
+## 🔄 Actualizar un informe por API (sin backend)
+
+Podés **sobrescribir el contenido de un informe** de forma programática (desde otro
+sistema, un cron, una GitHub Action, etc.) sin usar el panel y sin montar un
+servidor. Se apoya en la **REST API de Firebase**, así que sigue funcionando en el
+plan gratuito (Spark).
+
+El repositorio incluye un script listo: [`scripts/update_report.py`](scripts/update_report.py)
+(solo requiere Python 3, sin dependencias).
+
+### Cómo funciona
+1. Se autentica como un **usuario admin** (email/contraseña) y obtiene un token.
+2. Sube el archivo nuevo a la **misma ruta de Storage** del informe → lo sobrescribe.
+3. Actualiza el tamaño en la metadata y, si el informe tiene un **enlace público**,
+   refresca su URL (al sobrescribir, el token de descarga cambia).
+
+Como el ID del informe y su ruta no cambian, **los accesos por usuario y los
+permisos existentes se mantienen**.
+
+### Uso
+
+```bash
+# Credenciales por variables de entorno (recomendado)
+export PORTAL_EMAIL='admin-servicio@equipos.com.uy'
+export PORTAL_PASSWORD='••••••••'
+
+# 1) Listar los informes para conocer sus IDs
+python3 scripts/update_report.py --list
+
+# 2) Sobrescribir un informe por su ID
+python3 scripts/update_report.py --report-id <ID> --file ./nuevo.html
+```
+
+### Recomendaciones
+- Creá un **usuario admin "de servicio"** dedicado para esta integración (no reutilices
+  tu usuario personal), así podés rotar o revocar sus credenciales sin afectar tu acceso.
+- Cualquier cliente HTTP sirve (curl, Node, n8n, etc.): el script solo hace 3 llamadas
+  REST (login → subir a Storage → PATCH en Firestore). El `.py` sirve de referencia.
+
+---
 # plataforma-informes-ec
