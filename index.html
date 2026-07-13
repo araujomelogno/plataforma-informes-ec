@@ -100,6 +100,12 @@
       letter-spacing: -0.03em; margin-bottom: 0.35rem;
     }
     .login-sub { font-size: 0.85rem; color: var(--gray); margin-bottom: 2rem; font-weight: 500; }
+    .login-forgot { margin-top: 1rem; text-align: center; }
+    .login-forgot a {
+      font-size: 0.82rem; font-weight: 600; color: var(--orange);
+      text-decoration: none; cursor: pointer;
+    }
+    .login-forgot a:hover { text-decoration: underline; }
 
     @media (max-width: 700px) {
       .login-wrap { grid-template-columns: 1fr; }
@@ -559,6 +565,9 @@
           <input type="password" id="login-pass" placeholder="••••••••" autocomplete="current-password" />
         </div>
         <button class="btn btn-orange btn-full" onclick="doLogin()">Ingresar</button>
+        <p class="login-forgot">
+          <a onclick="forgotPassword(); return false;">¿Olvidaste tu contraseña?</a>
+        </p>
       </div>
     </div>
   </div>
@@ -827,6 +836,8 @@ const firebaseConfig = {
 
 firebase.initializeApp(firebaseConfig);
 const auth    = firebase.auth();
+// Los correos de Firebase Auth (restablecer contraseña, etc.) se envían en español.
+auth.languageCode = 'es';
 const db      = firebase.firestore();
 const storage = firebase.storage();
 
@@ -931,6 +942,37 @@ async function doLogin() {
   }
 }
 async function doLogout() { await endSession(); auth.signOut(); }
+
+// Autoservicio desde el login: el usuario pide un enlace para restablecer su
+// contraseña. Firebase envía el correo (en español, ver auth.languageCode).
+// Por seguridad no revelamos si el email existe o no (anti-enumeración).
+async function forgotPassword() {
+  const email = v('login-email');
+  clearAlert('login-alert');
+  if (!email) {
+    return showAlert('login-alert', 'error', '✉️ Escribí tu email arriba y volvé a tocar "¿Olvidaste tu contraseña?"');
+  }
+  const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRe.test(email)) {
+    return showAlert('login-alert', 'error', '❌ El email no es válido.');
+  }
+  try {
+    await auth.sendPasswordResetEmail(email);
+  } catch (err) {
+    const code = (err && err.code) || '';
+    // A propósito NO distinguimos "usuario no encontrado": mostramos siempre el
+    // mismo mensaje para no filtrar qué correos están registrados.
+    if (code === 'auth/invalid-email') {
+      return showAlert('login-alert', 'error', '❌ El email no es válido.');
+    }
+    if (code === 'auth/too-many-requests') {
+      return showAlert('login-alert', 'error', '⏳ Demasiados intentos. Esperá unos minutos e intentá de nuevo.');
+    }
+    // Otros errores (incluido user-not-found): caemos al mensaje neutro de éxito.
+  }
+  showAlert('login-alert', 'success',
+    `<span>✅ Si existe una cuenta con <strong>${esc(email)}</strong>, te enviamos un correo con el enlace para elegir una contraseña nueva.<br>Revisá tu bandeja de entrada (y la carpeta de spam).</span>`);
+}
 
 /* ── RENDER ── */
 function renderLogin() {
