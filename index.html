@@ -414,6 +414,14 @@
     .folder-tree-row { display:flex; align-items:center; gap:.5rem; padding:.45rem .1rem; border-bottom:1px solid #f0f0f0; }
     .folder-tree-row .fname { font-weight:600; color:var(--dark); }
     .folder-tree-empty { color:var(--gray); font-size:.85rem; font-weight:500; padding:.5rem 0; }
+    /* Selector de usuarios por informe (modal) */
+    .user-pick-list { max-height:340px; overflow-y:auto; border:1px solid var(--border); border-radius:4px; }
+    .user-pick { display:flex; align-items:center; gap:.6rem; padding:.55rem .7rem; border-bottom:1px solid #f0f0f0; cursor:pointer; }
+    .user-pick:last-child { border-bottom:none; }
+    .user-pick:hover { background:#faf7f5; }
+    .user-pick input { flex:0 0 auto; }
+    .user-pick-avatar { width:26px; height:26px; border-radius:50%; background:var(--orange); color:#fff; display:flex; align-items:center; justify-content:center; font-size:.72rem; font-weight:700; flex:0 0 auto; }
+    .user-pick-email { font-size:.85rem; font-weight:600; color:var(--dark); word-break:break-word; }
 
     /* ══════════════════════════════════════
        ALERTS & BADGES
@@ -1079,6 +1087,7 @@ function renderReportsTable() {
           <td><select class="fselect" style="min-width:150px;font-size:.8rem;padding:.4rem .5rem" onchange="moveReport('${r.id}', this.value)">${folderOptionsHTML(r.folderId || '')}</select></td>
           <td><div class="td-actions">
             <button class="btn btn-outline btn-sm" onclick="previewReport('${r.storagePath}','${esc(r.name)}')">👁 Ver</button>
+            <button class="btn btn-outline btn-sm" onclick="openReportUsersModal('${r.id}','${esc(r.name)}')">👥 Usuarios</button>
             <button class="btn btn-outline btn-sm" onclick="startOverwrite('${r.id}','${r.storagePath}','${esc(r.name)}')">🔄 Reescribir</button>
             <button class="btn btn-outline btn-sm" onclick="managePublicLink('${r.id}','${r.storagePath}','${esc(r.name)}')">${r.publicToken ? '🔗 Link público ✓' : '🔗 Link público'}</button>
             <button class="btn btn-danger btn-sm" onclick="deleteReport('${r.id}','${r.storagePath}')">🗑</button>
@@ -1598,6 +1607,100 @@ function openLinkModal(bodyHtml) {
 function setLinkModalBody(html) { const b = el('link-modal-body'); if (b) b.innerHTML = html; }
 function closeLinkModal() { const m = el('link-modal'); if (m) m.remove(); }
 
+/* ── Diálogo: usuarios con acceso a un informe (desde la lista de informes) ── */
+let _reportUsersModal = null;   // { reportId, name, users:[{uid,email,has}] }
+
+function openUsersModal(bodyHtml) {
+  closeUsersModal();
+  const m = document.createElement('div');
+  m.className = 'modal-backdrop'; m.id = 'users-modal';
+  m.onclick = (e) => { if (e.target === m) closeUsersModal(); };
+  m.innerHTML = `<div class="modal-box">
+    <div class="modal-head">
+      <span class="modal-title">👥 Usuarios con acceso</span>
+      <button class="btn btn-outline btn-sm" onclick="closeUsersModal()">✕ Cerrar</button>
+    </div>
+    <div class="modal-body" id="users-modal-body">${bodyHtml}</div>
+  </div>`;
+  document.body.appendChild(m);
+}
+function setUsersModalBody(html) { const b = el('users-modal-body'); if (b) b.innerHTML = html; }
+function closeUsersModal() { const m = el('users-modal'); if (m) m.remove(); _reportUsersModal = null; }
+
+async function openReportUsersModal(reportId, name) {
+  openUsersModal('<div class="loading">Cargando usuarios…</div>');
+  try {
+    // Acceso actual: leemos todos los userAccess una vez y armamos el mapa.
+    const snap = await db.collection('userAccess').get();
+    const accessByUid = {};
+    snap.docs.forEach(d => { accessByUid[d.id] = (d.data().reportIds || []); });
+    const users = allUsers
+      .filter(u => u.role !== 'admin')
+      .map(u => ({ uid: u.id, email: u.email || '', has: (accessByUid[u.id] || []).includes(reportId) }))
+      .sort((a, b) => a.email.localeCompare(b.email, 'es'));
+    _reportUsersModal = { reportId, name, users };
+    setUsersModalBody(reportUsersShellHTML());
+    renderReportUsersList();
+  } catch (e) {
+    setUsersModalBody(`<div class="alert alert-error">❌ No se pudieron cargar los usuarios: ${esc(e.message || String(e))}</div>`);
+  }
+}
+
+function reportUsersShellHTML() {
+  const st = _reportUsersModal; if (!st) return '';
+  if (!st.users.length) {
+    return `<div class="folder-tree-empty">No hay usuarios (no-admin) para asignar. Creá usuarios en la pestaña Usuarios.</div>`;
+  }
+  return `
+    <p style="font-size:.85rem;color:var(--gray);font-weight:500;margin:0 0 .7rem">
+      Elegí qué usuarios pueden ver <b>${esc(st.name)}</b>. Los cambios se guardan automáticamente.
+    </p>
+    <input type="text" id="report-users-filter" placeholder="Buscar usuario por email…"
+      oninput="renderReportUsersList()" style="width:100%;margin-bottom:.6rem" />
+    <div id="report-users-count" style="font-size:.78rem;color:var(--gray);font-weight:600;margin-bottom:.5rem"></div>
+    <div id="report-users-listbox" class="user-pick-list"></div>`;
+}
+
+// Rebuild solo la lista + contador (no el input) para no perder el foco al filtrar.
+function renderReportUsersList() {
+  const st = _reportUsersModal; if (!st) return;
+  const f = (el('report-users-filter') && el('report-users-filter').value || '').trim().toLowerCase();
+  const list = st.users.filter(u => !f || u.email.toLowerCase().includes(f));
+  const box = el('report-users-listbox');
+  if (box) {
+    box.innerHTML = list.length ? list.map(u => `
+      <label class="user-pick">
+        <input type="checkbox" ${u.has ? 'checked' : ''} onchange="toggleReportUser('${u.uid}', this.checked, this)" />
+        <span class="user-pick-avatar">${esc((u.email[0] || '?').toUpperCase())}</span>
+        <span class="user-pick-email">${esc(u.email)}</span>
+      </label>`).join('') : `<div class="folder-tree-empty" style="padding:.7rem">No hay usuarios que coincidan.</div>`;
+  }
+  const cnt = el('report-users-count');
+  if (cnt) {
+    const granted = st.users.filter(u => u.has).length;
+    cnt.textContent = `${granted} con acceso · ${st.users.length} ${st.users.length === 1 ? 'usuario' : 'usuarios'}`;
+  }
+}
+
+async function toggleReportUser(uid, grant, cb) {
+  const st = _reportUsersModal; if (!st) return;
+  if (cb) cb.disabled = true;
+  try {
+    await grantReportToUser(uid, st.reportId, grant);
+    const u = st.users.find(x => x.uid === uid); if (u) u.has = grant;
+    const cnt = el('report-users-count');
+    if (cnt) {
+      const granted = st.users.filter(x => x.has).length;
+      cnt.textContent = `${granted} con acceso · ${st.users.length} ${st.users.length === 1 ? 'usuario' : 'usuarios'}`;
+    }
+  } catch (e) {
+    alert('No se pudo actualizar el acceso: ' + (e.message || e));
+    if (cb) cb.checked = !grant;   // revertir el toggle
+  } finally {
+    if (cb) cb.disabled = false;
+  }
+}
+
 /* ── USERS ── */
 async function loadUsers() {
   try {
@@ -1888,19 +1991,27 @@ async function loadUserPermissions() {
     </div>`;
 }
 
-async function togglePerm(userId, reportId, cb) {
-  const on = cb.checked;
+// Da o quita el acceso de un usuario a un informe (colección userAccess).
+// Al conceder, inicializa las protecciones por defecto. Usado tanto por la
+// pestaña Permisos (por usuario) como por el diálogo "Usuarios" (por informe).
+async function grantReportToUser(userId, reportId, grant) {
   const snap = await db.collection('userAccess').doc(userId).get();
   const data = snap.exists ? snap.data() : {};
   let ids = data.reportIds || [];
   const options = data.options || {};
-  if (on) {
+  if (grant) {
     if (!ids.includes(reportId)) ids.push(reportId);
     if (!options[reportId]) options[reportId] = Object.assign({}, DEFAULT_OPTS);
   } else {
     ids = ids.filter(x => x !== reportId);
   }
   await db.collection('userAccess').doc(userId).set({ reportIds: ids, options }, { merge: true });
+  return options;
+}
+
+async function togglePerm(userId, reportId, cb) {
+  const on = cb.checked;
+  const options = await grantReportToUser(userId, reportId, on);
   // Reflejar en la UI: activar/desactivar los toggles de protección
   const item = el('perm-' + reportId);
   if (item) {
