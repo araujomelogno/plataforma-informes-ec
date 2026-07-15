@@ -689,6 +689,9 @@
             <span class="card-header-title">Archivos subidos</span>
             <span class="count-chip" id="reports-count">0</span>
           </div>
+          <div style="padding:.9rem 1.25rem 0">
+            <input type="text" id="reports-filter" placeholder="🔎 Filtrar por nombre…" oninput="renderReportsTable()" style="width:100%;max-width:360px" />
+          </div>
           <div id="reports-table"><div class="loading">Cargando archivos...</div></div>
         </div>
       </div>
@@ -745,6 +748,9 @@
           <div class="card-header">
             <span class="card-header-title">Usuarios registrados</span>
             <span class="count-chip" id="users-count">0</span>
+          </div>
+          <div style="padding:.9rem 1.25rem 0">
+            <input type="text" id="users-filter" placeholder="🔎 Filtrar por email…" oninput="renderUsersTable()" style="width:100%;max-width:360px" />
           </div>
           <div id="users-table"><div class="loading">Cargando usuarios...</div></div>
         </div>
@@ -1075,11 +1081,17 @@ function renderReportsTable() {
     el('reports-table').innerHTML = emptyHTML('📭', 'No hay informes subidos aún');
     return;
   }
+  const f = (el('reports-filter') && el('reports-filter').value || '').trim().toLowerCase();
+  const rows = f ? allReports.filter(r => String(r.name || '').toLowerCase().includes(f)) : allReports;
+  if (!rows.length) {
+    el('reports-table').innerHTML = emptyHTML('🔎', 'Ningún informe coincide con la búsqueda.');
+    return;
+  }
   el('reports-table').innerHTML = `
     <table>
       <thead><tr><th>Nombre</th><th>Tamaño</th><th>Fecha</th><th>Carpeta</th><th>Acciones</th></tr></thead>
       <tbody>
-        ${allReports.map(r => `
+        ${rows.map(r => `
         <tr>
           <td style="font-weight:600">${fileIcon(r.name)} ${esc(r.name)}</td>
           <td style="color:var(--gray)">${fmtSize(r.size)}</td>
@@ -1721,11 +1733,17 @@ function renderUsersTable() {
     el('users-table').innerHTML = emptyHTML('👤', 'No hay usuarios registrados aún');
     return;
   }
+  const f = (el('users-filter') && el('users-filter').value || '').trim().toLowerCase();
+  const rows = f ? allUsers.filter(u => String(u.email || '').toLowerCase().includes(f)) : allUsers;
+  if (!rows.length) {
+    el('users-table').innerHTML = emptyHTML('🔎', 'Ningún usuario coincide con la búsqueda.');
+    return;
+  }
   el('users-table').innerHTML = `
     <table>
       <thead><tr><th>Email</th><th>Rol</th><th>Creado</th><th>Acciones</th></tr></thead>
       <tbody>
-        ${allUsers.map(u => {
+        ${rows.map(u => {
           const isAdmin = u.role === 'admin';
           const isSelf  = currentUser && u.id === currentUser.uid;
           const roleBtn = isAdmin
