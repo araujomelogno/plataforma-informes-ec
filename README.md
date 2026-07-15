@@ -311,6 +311,47 @@ Cómo funciona: el dashboard (dentro del iframe) manda eventos por `postMessage`
 
 ---
 
+## ⚙️ Parámetros por usuario en los informes HTML
+
+Cada informe HTML puede **renderizarse dinámicamente según el usuario** que lo abre.
+El portal —que sabe quién está logueado— le envía al informe (dentro del `<iframe>`)
+la **identidad del usuario** (`email`, `uid`) y un objeto **`params`** con los pares
+clave/valor que el admin haya definido para ese usuario.
+
+### Definir los parámetros de un usuario
+
+En **Panel Admin → Usuarios → ⚙️ Parámetros** (botón en cada usuario) se abren los
+parámetros clave/valor de ese usuario (ej: `clienteId = 123`, `region = norte`). Se
+guardan en el propio documento del usuario, así que no requieren reglas nuevas.
+
+### Qué agregar en cada dashboard HTML
+
+Pegá este bloque una vez, antes de `</body>`:
+
+```html
+<!-- Parámetros del portal (por usuario) -->
+<script>
+(function () {
+  window.addEventListener('message', function (e) {
+    var d = e.data;
+    if (!d || d.__portalParams !== true) return;
+    // Disponibles: d.email, d.uid, y d.params (objeto con las claves del admin)
+    // Ejemplo: filtrar el dashboard por el cliente del usuario
+    if (window.renderConParametros) window.renderConParametros(d);
+  });
+  // Avisar al portal que el dashboard está listo para recibir los parámetros
+  try { parent.postMessage({ __portalParamsRequest: true }, '*'); } catch (e) {}
+})();
+</script>
+```
+
+> ⚠️ Como todo ocurre en el navegador del cliente, estos parámetros sirven para
+> **personalizar la vista** (filtrar por su cliente, mostrar su nombre, etc.). Si los
+> datos fueran sensibles, la protección real debe estar en la fuente de donde el HTML
+> obtiene los datos, no en estos parámetros (un usuario técnico podría alterarlos).
+
+---
+
 ## 🔄 Actualizar un informe por API (sin backend)
 
 Podés **sobrescribir el contenido de un informe** de forma programática (desde otro
