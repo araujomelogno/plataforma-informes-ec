@@ -352,6 +352,75 @@ Pegá este bloque una vez, antes de `</body>`:
 
 ---
 
+### Mostrar/ocultar secciones según el parámetro (sin programar filtros)
+
+Para que **una misma plantilla** muestre distinto contenido a cada usuario, marcá
+cada sección con un atributo y dejá que un pequeño *runtime* la muestre u oculte
+según los parámetros del usuario. No hay que escribir lógica de filtrado.
+
+| Lo que querés | Atributo en el contenedor de la sección |
+|---|---|
+| Visible **solo** si `region=norte` | `data-portal-show="region=norte"` |
+| Visible si `clienteId` es 777 **o** 888 | `data-portal-show="clienteId=777,888"` |
+| Visible si `plan=premium` **y** `region=norte` | `data-portal-show="plan=premium;region=norte"` |
+| Visible si el usuario **tiene** el parámetro `betaAccess` | `data-portal-show="betaAccess"` |
+| **Ocultar** para `region=sur` (visible al resto) | `data-portal-hide="region=sur"` |
+
+Sintaxis: `,` = varios valores (OR) · `;` = varios parámetros (AND) · solo el
+nombre = "tiene ese parámetro (con cualquier valor)".
+
+```html
+<section data-portal-show="region=norte">… contenido solo para region=norte …</section>
+```
+
+Pegá este bloque una vez, antes de `</body>` (reemplaza al snippet simple de más
+arriba: ya hace el handshake y además resuelve los `data-portal-show/hide`):
+
+```html
+<script>
+(function () {
+  var GATES = '[data-portal-show],[data-portal-hide]';
+  function matchExpr(expr, params) {
+    return String(expr).split(';').every(function (cond) {
+      cond = cond.trim(); if (!cond) return true;
+      var i = cond.indexOf('=');
+      if (i < 0) { var p = params[cond]; return p != null && String(p).trim() !== ''; }
+      var key = cond.slice(0, i).trim();
+      var allowed = cond.slice(i + 1).split(',').map(function (s) { return s.trim(); });
+      var val = params[key]; val = (val == null) ? '' : String(val).trim();
+      return allowed.indexOf(val) !== -1;
+    });
+  }
+  document.querySelectorAll('[data-portal-show]').forEach(function (el) { el.style.display = 'none'; });
+  var applied = false;
+  function apply(data, preview) {
+    if (applied) return; applied = true;
+    data = data || {}; var params = data.params || {};
+    window.PORTAL = { email: data.email || null, uid: data.uid || null, params: params, preview: !!preview };
+    document.querySelectorAll('[data-portal-show]').forEach(function (el) {
+      el.style.display = matchExpr(el.getAttribute('data-portal-show'), params) ? '' : 'none';
+    });
+    document.querySelectorAll('[data-portal-hide]').forEach(function (el) {
+      el.style.display = matchExpr(el.getAttribute('data-portal-hide'), params) ? 'none' : '';
+    });
+    if (preview) document.querySelectorAll(GATES).forEach(function (el) { el.style.display = ''; });
+    if (window.onPortalParams) { try { window.onPortalParams(window.PORTAL); } catch (e) {} }
+  }
+  window.addEventListener('message', function (e) {
+    if (e.data && e.data.__portalParams === true) apply(e.data, false);
+  });
+  try { parent.postMessage({ __portalParamsRequest: true }, '*'); } catch (e) {}
+  setTimeout(function () { if (!applied) apply({ params: {} }, true); }, 1500);   // fuera del portal: mostrar todo
+})();
+</script>
+```
+
+> Dentro del HTML podés usar `window.PORTAL` (`email`, `uid`, `params`) y opcionalmente
+> definir `window.onPortalParams(portal)` para personalizar textos.
+> Hay un ejemplo completo y funcional en [`examples/dashboard-parametros.html`](examples/dashboard-parametros.html).
+
+---
+
 ## 🔄 Actualizar un informe por API (sin backend)
 
 Podés **sobrescribir el contenido de un informe** de forma programática (desde otro
