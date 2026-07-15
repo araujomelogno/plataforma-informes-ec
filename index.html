@@ -630,6 +630,8 @@
               <p class="hint">HTML, PDF, Word, PowerPoint y video (.mp4/.webm/.mov) · Podés subir varios a la vez</p>
             </div>
             <input type="file" id="file-input" accept=".html,.htm,.pdf,.doc,.docx,.ppt,.pptx,.mp4,.webm,.ogg,.ogv,.mov,.m4v" multiple class="hidden" onchange="handleFileSelect(event)" />
+            <!-- Input oculto para reescribir (sobrescribir) el contenido de un informe ya cargado -->
+            <input type="file" id="overwrite-input" accept=".html,.htm,.pdf,.doc,.docx,.ppt,.pptx,.mp4,.webm,.ogg,.ogv,.mov,.m4v" class="hidden" onchange="handleOverwriteSelect(event)" />
             <div id="upload-progress" class="hidden progress-wrap">
               <div class="progress-meta">
                 <span id="upload-status">Subiendo...</span>
@@ -1036,9 +1038,10 @@ function renderReportsTable() {
         <tr>
           <td style="font-weight:600">${fileIcon(r.name)} ${esc(r.name)}</td>
           <td style="color:var(--gray)">${fmtSize(r.size)}</td>
-          <td style="color:var(--gray)">${fmtDate(r.createdAt)}</td>
+          <td style="color:var(--gray)">${fmtDate(r.createdAt)}${r.updatedAt ? `<br><span style="font-size:.72rem" title="Última reescritura">✏️ ${fmtDate(r.updatedAt)}</span>` : ''}</td>
           <td><div class="td-actions">
             <button class="btn btn-outline btn-sm" onclick="previewReport('${r.storagePath}','${esc(r.name)}')">👁 Ver</button>
+            <button class="btn btn-outline btn-sm" onclick="startOverwrite('${r.id}','${r.storagePath}','${esc(r.name)}')">🔄 Reescribir</button>
             <button class="btn btn-outline btn-sm" onclick="managePublicLink('${r.id}','${r.storagePath}','${esc(r.name)}')">${r.publicToken ? '🔗 Link público ✓' : '🔗 Link público'}</button>
             <button class="btn btn-danger btn-sm" onclick="deleteReport('${r.id}','${r.storagePath}')">🗑</button>
           </div></td>
@@ -1141,6 +1144,98 @@ async function uploadFiles(files) {
   bar.style.width = '100%'; el('upload-pct').textContent = '100%';
   await loadReports(); renderReportsTable();
   setTimeout(() => el('upload-progress').classList.add('hidden'), 3000);
+}
+
+// ── Reescribir (sobrescribir) el contenido de un informe ya cargado ──
+// Sube un archivo nuevo a la MISMA ruta de Storage, así se conserva el mismo
+// informe (su ID) y con él sus permisos, accesos y enlace público. Mismo
+// criterio que scripts/update_report.py, pero desde el panel del admin.
+let _overwriteTarget = null;
+
+function startOverwrite(reportId, storagePath, name) {
+  _overwriteTarget = { reportId, storagePath, name, ext: extOf(name) };
+  const inp = el('overwrite-input');
+  if (inp) { inp.value = ''; inp.click(); }
+}
+
+function handleOverwriteSelect(e) {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = '';
+  if (file && _overwriteTarget) overwriteReport(_overwriteTarget, file);
+}
+
+async function overwriteReport(target, file) {
+  if (!isAllowed(file.name)) {
+    return alert('Formato no soportado.\n\nFormatos permitidos: HTML, PDF, DOC, DOCX, PPT, PPTX y video.');
+  }
+  // Debe ser del mismo tipo que el informe original: el visor decide cómo
+  // renderizar según la extensión del nombre, que no cambia al reescribir.
+  // Para cambiar de formato, hay que borrar el informe y subir uno nuevo.
+  if (extOf(file.name) !== target.ext) {
+    return alert(`El archivo nuevo debe ser del mismo tipo (.${target.ext}) que el informe actual.\n\n` +
+      `Para cambiar el formato, borrá el informe y subí uno nuevo.`);
+  }
+  const rep = allReports.find(x => x.id === target.reportId) || {};
+  if (!confirm(
+    `¿Reescribir el informe "${target.name}" con el archivo "${file.name}"?\n\n` +
+    `Se reemplaza el contenido, pero se conservan el mismo informe, sus permisos, ` +
+    `accesos y el enlace público (si tiene).\n\nEsta acción no se puede deshacer.`)) return;
+
+  el('upload-progress').classList.remove('hidden');
+  const bar = el('progress-bar'), statusEl = el('upload-status');
+  statusEl.textContent = `Reescribiendo: ${target.name}`;
+  statusEl.style.color = '';
+  el('upload-pct').textContent = '0%';
+  bar.style.width = '0%'; bar.style.background = 'var(--orange)';
+
+  try {
+    const task = storage.ref(target.storagePath).put(file, { contentType: file.type || guessContentType(file.name) });
+    await new Promise((res, rej) => {
+      task.on('state_changed',
+        s => {
+          const pct = Math.round(s.bytesTransferred / s.totalBytes * 100);
+          bar.style.width = pct + '%'; el('upload-pct').textContent = pct + '%';
+        },
+        err => { console.error('Overwrite upload error:', err); rej(err); },
+        () => res()
+      );
+    });
+
+    // Metadata: nuevo tamaño + marca de última reescritura.
+    await db.collection('reports').doc(target.reportId).update({
+      size: file.size,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+
+    // Si tiene enlace público, refrescamos su URL: al sobrescribir, Storage
+    // genera un token de descarga nuevo y la URL guardada deja de servir.
+    if (rep.publicToken) {
+      try {
+        const newUrl = await storage.ref(target.storagePath).getDownloadURL();
+        await db.collection('publicLinks').doc(rep.publicToken).update({ url: newUrl });
+      } catch (e2) {
+        console.error('No se pudo refrescar el enlace público:', e2);
+        alert('El informe se reescribió, pero no se pudo refrescar el enlace público automáticamente.\n\n' +
+          'Abrí "Link público" del informe y regeneralo para que apunte al contenido nuevo.');
+      }
+    }
+
+    statusEl.textContent = `✅ "${target.name}" reescrito correctamente`;
+    bar.style.width = '100%'; el('upload-pct').textContent = '100%';
+    await loadReports(); renderReportsTable();
+    setTimeout(() => el('upload-progress').classList.add('hidden'), 3000);
+  } catch (err) {
+    bar.style.background = '#B83A26'; bar.style.width = '100%';
+    let msg = '❌ Error al reescribir';
+    if (err.code === 'storage/unauthorized')   msg = '❌ Sin permisos — revisá las reglas de Storage en Firebase Console';
+    else if (err.code === 'permission-denied') msg = '❌ Firestore bloqueó la escritura — revisá que seas admin';
+    else if (err.code)                         msg = `❌ Error: ${err.code}`;
+    else                                       msg = `❌ Error: ${err.message || 'desconocido'}`;
+    statusEl.textContent = msg; statusEl.style.color = '#B83A26';
+    alert(msg + '\n\nDetalle técnico (también en consola F12):\n' + (err.code || '') + '\n' + (err.message || err));
+  } finally {
+    _overwriteTarget = null;
+  }
 }
 
 async function deleteReport(id, storagePath) {
