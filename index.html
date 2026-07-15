@@ -1713,6 +1713,83 @@ async function toggleReportUser(uid, grant, cb) {
   }
 }
 
+/* ── Parámetros por usuario (se envían a los informes HTML) ── */
+// Se guardan en el propio doc users/{uid} (campo 'params'), que el cliente ya
+// lee al iniciar sesión. El portal se los pasa al iframe del informe por
+// postMessage (ver setupPortalParams).
+function openParamsModal(email) {
+  closeParamsModal();
+  const m = document.createElement('div');
+  m.className = 'modal-backdrop'; m.id = 'params-modal';
+  m.onclick = (e) => { if (e.target === m) closeParamsModal(); };
+  m.innerHTML = `<div class="modal-box">
+    <div class="modal-head">
+      <span class="modal-title">⚙️ Parámetros de ${esc(email)}</span>
+      <button class="btn btn-outline btn-sm" onclick="closeParamsModal()">✕ Cerrar</button>
+    </div>
+    <div class="modal-body" id="params-modal-body"></div>
+  </div>`;
+  document.body.appendChild(m);
+}
+function setParamsModalBody(html) { const b = el('params-modal-body'); if (b) b.innerHTML = html; }
+function closeParamsModal() { const m = el('params-modal'); if (m) m.remove(); }
+
+function paramRowHTML(k, v) {
+  return `<div class="param-row" style="display:flex;gap:.5rem;margin-bottom:.5rem">
+    <input type="text" class="param-key" placeholder="clave (ej: clienteId)" value="${esc(k)}" style="flex:1;min-width:0" />
+    <input type="text" class="param-val" placeholder="valor" value="${esc(v)}" style="flex:1;min-width:0" />
+    <button class="btn btn-danger btn-sm" title="Quitar" onclick="this.closest('.param-row').remove()">✕</button>
+  </div>`;
+}
+
+function openUserParamsModal(uid, email) {
+  const u = allUsers.find(x => x.id === uid) || {};
+  const entries = Object.entries(u.params || {});
+  openParamsModal(email);
+  const rows = (entries.length ? entries : [['', '']]).map(([k, v]) => paramRowHTML(k, String(v))).join('');
+  setParamsModalBody(`
+    <p style="font-size:.85rem;color:var(--gray);font-weight:500;margin:0 0 .9rem">
+      Definí parámetros (clave/valor) para <b>${esc(email)}</b>. El portal se los envía a los
+      informes HTML de este usuario, que pueden renderizarse en función de ellos.
+    </p>
+    <div id="params-rows">${rows}</div>
+    <button class="btn btn-outline btn-sm" onclick="addParamRow()">➕ Agregar parámetro</button>
+    <div id="params-alert" style="margin-top:.6rem"></div>
+    <div style="margin-top:1rem;border-top:1px solid #eee;padding-top:.85rem;display:flex;justify-content:flex-end;gap:.5rem">
+      <button class="btn btn-orange" onclick="saveUserParams('${uid}')">💾 Guardar</button>
+    </div>`);
+}
+
+function addParamRow() {
+  const box = el('params-rows'); if (box) box.insertAdjacentHTML('beforeend', paramRowHTML('', ''));
+}
+
+async function saveUserParams(uid) {
+  const rows = [...document.querySelectorAll('#params-rows .param-row')];
+  const params = {};
+  const dupes = new Set(); let hasDupe = false;
+  rows.forEach(r => {
+    const k = r.querySelector('.param-key').value.trim();
+    const v = r.querySelector('.param-val').value.trim();
+    if (!k) return;
+    if (Object.prototype.hasOwnProperty.call(params, k)) { hasDupe = true; dupes.add(k); }
+    params[k] = v;
+  });
+  if (hasDupe) {
+    const a = el('params-alert');
+    if (a) a.innerHTML = `<div class="alert alert-error">❌ Hay claves repetidas: ${esc([...dupes].join(', '))}. Cada clave debe ser única.</div>`;
+    return;
+  }
+  try {
+    await db.collection('users').doc(uid).update({ params });
+    const u = allUsers.find(x => x.id === uid); if (u) u.params = params;
+    closeParamsModal();
+  } catch (e) {
+    const a = el('params-alert');
+    if (a) a.innerHTML = `<div class="alert alert-error">❌ No se pudo guardar: ${esc(e.message || String(e))}</div>`;
+  }
+}
+
 /* ── USERS ── */
 async function loadUsers() {
   try {
@@ -1751,6 +1828,8 @@ function renderUsersTable() {
             : `<button class="btn btn-orange btn-sm" onclick="changeRole('${u.id}','${esc(u.email)}','admin')">⬆ Hacer admin</button>`;
           const permBtn = isAdmin ? '' :
             `<button class="btn btn-outline btn-sm" onclick="goToUserPerms('${u.id}')">🔐 Permisos</button>`;
+          const paramsBtn = isAdmin ? '' :
+            `<button class="btn btn-outline btn-sm" onclick="openUserParamsModal('${u.id}','${esc(u.email)}')">⚙️ Parámetros</button>`;
           const delBtn = isSelf ? '' :
             `<button class="btn btn-danger btn-sm" onclick="deleteUser('${u.id}','${esc(u.email)}')">🗑 Borrar</button>`;
           return `
@@ -1760,6 +1839,7 @@ function renderUsersTable() {
           <td style="color:var(--gray)">${fmtDate(u.createdAt)}</td>
           <td><div class="td-actions">
             ${permBtn}
+            ${paramsBtn}
             <button class="btn btn-outline btn-sm" onclick="showUserAccess('${u.id}','${esc(u.email)}')">👁 Accesos</button>
             <button class="btn btn-outline btn-sm" onclick="resetUserPassword('${esc(u.email)}')">🔑 Restablecer contraseña</button>
             ${roleBtn}
@@ -2239,7 +2319,9 @@ async function openViewer(url, name, opts, viewerEmail, reportId) {
   try {
     if (kind === 'html') {
       content.innerHTML = `<iframe class="viewer-frame" src="${url}" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>`;
-      setupDashboardAnalytics(content.querySelector('iframe'), reportId, name);
+      const ifr = content.querySelector('iframe');
+      setupDashboardAnalytics(ifr, reportId, name);
+      setupPortalParams(ifr);
     } else if (kind === 'video') {
       renderVideo(url, content, opts);
     } else if (ext === 'pdf') {
@@ -2287,6 +2369,28 @@ function setupDashboardAnalytics(iframe, reportId, name) {
   };
   window.addEventListener('message', handler);
   const prev = _viewerCleanup;   // encadenar al cierre del visor para remover el listener
+  _viewerCleanup = () => { if (prev) prev(); window.removeEventListener('message', handler); };
+}
+
+// Envía al informe (iframe) los parámetros del usuario cuando este los pide.
+// El HTML debe pedirlos con: parent.postMessage({ __portalParamsRequest: true }, '*')
+// y escuchar la respuesta { __portalParams:true, email, uid, params }.
+function setupPortalParams(iframe) {
+  if (!iframe) return;
+  const handler = (e) => {
+    const d = e.data;
+    if (!d || d.__portalParamsRequest !== true) return;
+    if (e.source !== iframe.contentWindow) return;   // solo mensajes de ESTE iframe
+    const payload = {
+      __portalParams: true,
+      email: currentUser ? currentUser.email : null,
+      uid: currentUser ? currentUser.uid : null,
+      params: (currentUserData && currentUserData.params) || {}
+    };
+    try { iframe.contentWindow.postMessage(payload, '*'); } catch (err) {}
+  };
+  window.addEventListener('message', handler);
+  const prev = _viewerCleanup;
   _viewerCleanup = () => { if (prev) prev(); window.removeEventListener('message', handler); };
 }
 
