@@ -196,6 +196,32 @@ En **Panel Admin → Permisos**, dentro de cada informe asignado a un usuario, s
 
 ---
 
+## 📂 Carpetas (organización de informes)
+
+En **Panel Admin → Informes → Carpetas** se pueden crear carpetas (anidadas)
+para organizar los informes:
+
+- **Crear carpeta** eligiendo opcionalmente una carpeta "padre" (soporta
+  carpetas dentro de carpetas).
+- **Mover un informe** a una carpeta con el selector de la columna *Carpeta* de
+  la tabla, o elegir la carpeta destino al subir.
+- **Renombrar** y **borrar** carpetas. Al borrar una carpeta con contenido, sus
+  subcarpetas e informes se **mueven a la carpeta padre** (no se borra ningún
+  informe).
+
+Del lado del **cliente**, la vista "Mis Informes" se navega como un árbol: se
+ven las carpetas y los informes, y al entrar a una carpeta se ve su contenido
+(con "migas de pan" para volver). El acceso sigue siendo **por informe**: el
+cliente solo ve una carpeta si dentro (a cualquier nivel) tiene algún informe
+asignado a él.
+
+> Requiere **publicar las reglas de Firestore** actualizadas (incluyen la
+> colección `folders`): pegá el contenido de `firestore.rules` en Firebase
+> Console → Firestore → Reglas → Publicar. Solo el admin puede crear/editar
+> carpetas; cualquier usuario autenticado puede leerlas para navegar.
+
+---
+
 ## ⚙️ Configurar CORS del bucket (requerido para el visor)
 
 Para que el navegador pueda **leer** los PDF/Word/PowerPoint y renderizarlos inline, el bucket de Storage necesita permitir CORS desde el dominio del portal. Se hace **una sola vez** con el archivo `cors.json` incluido:

@@ -28,6 +28,14 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // ── Colección: folders (carpetas para organizar informes) ──
+    // Todos los usuarios autenticados pueden leer (para navegar el árbol de
+    // carpetas). Solo el admin puede crear / modificar / eliminar carpetas.
+    match /folders/{folderId} {
+      allow read:  if isAuth();
+      allow write: if isAdmin();
+    }
+
     // ── Colección: publicLinks (enlaces públicos a informes) ──
     // Lectura ABIERTA a cualquiera (sin login): así el enlace público funciona
     // desde cualquier navegador. El documento solo guarda la URL de descarga

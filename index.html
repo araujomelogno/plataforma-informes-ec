@@ -405,6 +405,15 @@
       margin-bottom: 0.35rem; word-break: break-word; letter-spacing: -0.005em;
     }
     .report-card .meta { font-size: 0.74rem; color: var(--gray); font-weight: 600; }
+    /* Navegación por carpetas (cliente) y árbol de carpetas (admin) */
+    .breadcrumb { display:flex; flex-wrap:wrap; align-items:center; gap:.35rem; margin-bottom:1.15rem; font-size:.85rem; font-weight:600; }
+    .breadcrumb a { color:var(--orange); cursor:pointer; text-decoration:none; }
+    .breadcrumb a:hover { text-decoration:underline; }
+    .breadcrumb .sep { color:var(--gray); }
+    .breadcrumb .current { color:var(--dark); }
+    .folder-tree-row { display:flex; align-items:center; gap:.5rem; padding:.45rem .1rem; border-bottom:1px solid #f0f0f0; }
+    .folder-tree-row .fname { font-weight:600; color:var(--dark); }
+    .folder-tree-empty { color:var(--gray); font-size:.85rem; font-weight:500; padding:.5rem 0; }
 
     /* ══════════════════════════════════════
        ALERTS & BADGES
@@ -620,6 +629,10 @@
         <div class="card">
           <div class="card-header"><span class="card-header-title">Subir nuevo informe</span></div>
           <div class="card-body">
+            <div class="form-group" style="max-width:420px">
+              <label>Subir a la carpeta</label>
+              <select id="upload-folder-select" class="fselect"><option value="">— Raíz —</option></select>
+            </div>
             <div class="upload-zone" id="upload-area"
               onclick="document.getElementById('file-input').click()"
               ondragover="handleDragOver(event)"
@@ -639,6 +652,27 @@
               </div>
               <div class="progress"><div class="progress-bar" id="progress-bar" style="width:0%"></div></div>
             </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <span class="card-header-title">Carpetas</span>
+            <span class="count-chip" id="folders-count">0</span>
+          </div>
+          <div class="card-body">
+            <div style="display:flex;gap:.6rem;flex-wrap:wrap;align-items:flex-end;margin-bottom:1rem">
+              <div class="form-group" style="margin:0;flex:1;min-width:200px">
+                <label>Nueva carpeta</label>
+                <input type="text" id="new-folder-name" placeholder="Nombre de la carpeta" />
+              </div>
+              <div class="form-group" style="margin:0;flex:1;min-width:200px">
+                <label>Dentro de</label>
+                <select id="new-folder-parent" class="fselect"><option value="">— Raíz —</option></select>
+              </div>
+              <button class="btn btn-orange" onclick="createFolder()">➕ Crear carpeta</button>
+            </div>
+            <div id="folders-tree"><div class="loading">Cargando carpetas...</div></div>
           </div>
         </div>
 
@@ -844,8 +878,10 @@ const db      = firebase.firestore();
 const storage = firebase.storage();
 
 let currentUser = null, currentUserData = null;
-let allReports = [], allUsers = [];
+let allReports = [], allUsers = [], allFolders = [];
 let myAccessOptions = {};   // opciones de protección del usuario actual: { reportId: {watermark,noPrint,...} }
+// Navegación por carpetas del cliente
+let _userFolderId = null, _userReports = [], _userVisibleFolderIds = new Set();
 let currentSessionId = null, _hbTimer = null, _sessionStarting = false;   // métricas de acceso
 let _loginNotice = null;   // aviso a mostrar en la pantalla de login (ej. acceso denegado)
 
@@ -988,9 +1024,10 @@ async function renderAdmin() {
   inject('tpl-admin');
   el('admin-email').textContent  = currentUser.email;
   el('admin-avatar').textContent = currentUser.email[0].toUpperCase();
-  await Promise.all([loadReports(), loadUsers()]);
+  await Promise.all([loadReports(), loadUsers(), loadFolders()]);
   renderReportsTable();
   renderUsersTable();
+  renderFoldersTree();
 }
 
 async function renderUser() {
@@ -1032,13 +1069,14 @@ function renderReportsTable() {
   }
   el('reports-table').innerHTML = `
     <table>
-      <thead><tr><th>Nombre</th><th>Tamaño</th><th>Fecha</th><th>Acciones</th></tr></thead>
+      <thead><tr><th>Nombre</th><th>Tamaño</th><th>Fecha</th><th>Carpeta</th><th>Acciones</th></tr></thead>
       <tbody>
         ${allReports.map(r => `
         <tr>
           <td style="font-weight:600">${fileIcon(r.name)} ${esc(r.name)}</td>
           <td style="color:var(--gray)">${fmtSize(r.size)}</td>
           <td style="color:var(--gray)">${fmtDate(r.createdAt)}${r.updatedAt ? `<br><span style="font-size:.72rem" title="Última reescritura">✏️ ${fmtDate(r.updatedAt)}</span>` : ''}</td>
+          <td><select class="fselect" style="min-width:150px;font-size:.8rem;padding:.4rem .5rem" onchange="moveReport('${r.id}', this.value)">${folderOptionsHTML(r.folderId || '')}</select></td>
           <td><div class="td-actions">
             <button class="btn btn-outline btn-sm" onclick="previewReport('${r.storagePath}','${esc(r.name)}')">👁 Ver</button>
             <button class="btn btn-outline btn-sm" onclick="startOverwrite('${r.id}','${r.storagePath}','${esc(r.name)}')">🔄 Reescribir</button>
@@ -1069,6 +1107,9 @@ async function uploadFiles(files) {
     alert('Se ignoraron archivos con formato no soportado:\n' + rejected.map(f => f.name).join('\n') +
           '\n\nFormatos permitidos: HTML, PDF, DOC, DOCX, PPT, PPTX.');
   if (!files.length) return;
+
+  // Carpeta destino elegida en el selector (null = raíz).
+  const uploadFolderId = (el('upload-folder-select') && el('upload-folder-select').value) || null;
 
   el('upload-progress').classList.remove('hidden');
   const bar = el('progress-bar');
@@ -1104,6 +1145,7 @@ async function uploadFiles(files) {
               await db.collection('reports').add({
                 name: file.name, storagePath: path, size: file.size,
                 ext: extOf(file.name),
+                folderId: uploadFolderId,   // null = raíz
                 createdAt: firebase.firestore.FieldValue.serverTimestamp()
               });
               res();
@@ -1142,8 +1184,164 @@ async function uploadFiles(files) {
 
   statusEl.textContent = '✅ ¡Archivos subidos correctamente!';
   bar.style.width = '100%'; el('upload-pct').textContent = '100%';
-  await loadReports(); renderReportsTable();
+  await loadReports(); renderReportsTable(); renderFoldersTree();
   setTimeout(() => el('upload-progress').classList.add('hidden'), 3000);
+}
+
+/* ── CARPETAS (organización jerárquica de informes) ── */
+// Modelo: colección 'folders' { name, parentId (null = raíz), createdAt }.
+// Cada informe tiene 'folderId' (null/ausente = raíz). El acceso del cliente
+// sigue siendo POR INFORME; las carpetas son solo para organizar y navegar.
+
+async function loadFolders() {
+  try {
+    const snap = await db.collection('folders').get();
+    allFolders = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  } catch { allFolders = []; }
+}
+
+function folderById(id) { return allFolders.find(f => f.id === id) || null; }
+
+function childFolders(parentId) {
+  return allFolders
+    .filter(f => (f.parentId || null) === (parentId || null))
+    .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'es'));
+}
+
+// Carpetas en orden de árbol (padre antes que hijos), con su profundidad.
+function foldersInTreeOrder(parentId = null, depth = 0, out = []) {
+  childFolders(parentId).forEach(f => {
+    out.push({ folder: f, depth });
+    foldersInTreeOrder(f.id, depth + 1, out);
+  });
+  return out;
+}
+
+// <option>s indentados para los selectores de carpeta.
+function folderOptionsHTML(selectedId) {
+  const sel = selectedId || '';
+  let html = `<option value="" ${sel === '' ? 'selected' : ''}>— Raíz —</option>`;
+  foldersInTreeOrder().forEach(({ folder, depth }) => {
+    const pad = '  '.repeat(depth);
+    html += `<option value="${folder.id}" ${sel === folder.id ? 'selected' : ''}>${pad}📁 ${esc(folder.name)}</option>`;
+  });
+  return html;
+}
+
+function refreshFolderSelectors() {
+  ['upload-folder-select', 'new-folder-parent'].forEach(id => {
+    const s = el(id);
+    if (s) { const prev = s.value; s.innerHTML = folderOptionsHTML(prev); }
+  });
+}
+
+function reportCountInFolder(folderId) {
+  return allReports.filter(r => (r.folderId || null) === folderId).length;
+}
+
+function renderFoldersTree() {
+  const cnt = el('folders-count');
+  if (cnt) cnt.textContent = allFolders.length;
+  refreshFolderSelectors();
+  const box = el('folders-tree');
+  if (!box) return;
+  const rows = foldersInTreeOrder();
+  if (!rows.length) {
+    box.innerHTML = `<div class="folder-tree-empty">Todavía no hay carpetas. Creá una arriba.</div>`;
+    return;
+  }
+  box.innerHTML = rows.map(({ folder, depth }) => {
+    const n = reportCountInFolder(folder.id);
+    const subs = childFolders(folder.id).length;
+    const meta = [];
+    if (subs) meta.push(`${subs} ${subs === 1 ? 'subcarpeta' : 'subcarpetas'}`);
+    meta.push(`${n} ${n === 1 ? 'informe' : 'informes'}`);
+    return `
+      <div class="folder-tree-row">
+        <span style="width:${depth * 22}px;flex:0 0 auto"></span>
+        <span class="fname">📁 ${esc(folder.name)}</span>
+        <span style="color:var(--gray);font-size:.78rem;font-weight:500">· ${meta.join(' · ')}</span>
+        <span style="flex:1"></span>
+        <button class="btn btn-outline btn-sm" onclick="renameFolder('${folder.id}')">✏️ Renombrar</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteFolder('${folder.id}')">🗑</button>
+      </div>`;
+  }).join('');
+}
+
+async function createFolder() {
+  const name = v('new-folder-name');
+  const parentId = v('new-folder-parent') || null;
+  if (!name) return alert('Escribí un nombre para la carpeta.');
+  try {
+    await db.collection('folders').add({
+      name, parentId,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    el('new-folder-name').value = '';
+    await loadFolders();
+    renderFoldersTree();
+    renderReportsTable();   // refresca los selectores de carpeta por fila
+  } catch (e) {
+    alert('No se pudo crear la carpeta: ' + (e.message || e));
+  }
+}
+
+async function renameFolder(id) {
+  const f = folderById(id); if (!f) return;
+  const name = prompt('Nuevo nombre de la carpeta:', f.name || '');
+  if (name == null) return;
+  const clean = name.trim();
+  if (!clean) return alert('El nombre no puede quedar vacío.');
+  try {
+    await db.collection('folders').doc(id).update({ name: clean });
+    await loadFolders();
+    renderFoldersTree();
+    renderReportsTable();
+  } catch (e) {
+    alert('No se pudo renombrar: ' + (e.message || e));
+  }
+}
+
+async function deleteFolder(id) {
+  const f = folderById(id); if (!f) return;
+  const subs = childFolders(id);
+  const reps = allReports.filter(r => (r.folderId || null) === id);
+  const parentId = f.parentId || null;
+  const parentName = parentId ? (folderById(parentId) ? folderById(parentId).name : 'la carpeta padre') : 'la raíz';
+  let msg = `¿Borrar la carpeta "${f.name}"?`;
+  if (subs.length || reps.length) {
+    msg += `\n\nSu contenido (${subs.length} subcarpeta(s) y ${reps.length} informe(s)) se moverá a ${parentName}.`;
+  }
+  msg += `\n\nNo se borra ningún informe.`;
+  if (!confirm(msg)) return;
+  try {
+    const batch = db.batch();
+    subs.forEach(s => batch.update(db.collection('folders').doc(s.id), { parentId: parentId }));
+    reps.forEach(r => batch.update(db.collection('reports').doc(r.id),
+      { folderId: parentId === null ? firebase.firestore.FieldValue.delete() : parentId }));
+    batch.delete(db.collection('folders').doc(id));
+    await batch.commit();
+    await Promise.all([loadFolders(), loadReports()]);
+    renderFoldersTree();
+    renderReportsTable();
+  } catch (e) {
+    alert('No se pudo borrar la carpeta: ' + (e.message || e));
+  }
+}
+
+async function moveReport(reportId, folderId) {
+  const target = folderId || null;
+  try {
+    await db.collection('reports').doc(reportId).update({
+      folderId: target === null ? firebase.firestore.FieldValue.delete() : target
+    });
+    const r = allReports.find(x => x.id === reportId);
+    if (r) { if (target === null) delete r.folderId; else r.folderId = target; }
+    renderFoldersTree();   // actualiza los contadores por carpeta
+  } catch (e) {
+    alert('No se pudo mover el informe: ' + (e.message || e));
+    renderReportsTable();  // revierte el selector al valor real
+  }
 }
 
 // ── Reescribir (sobrescribir) el contenido de un informe ya cargado ──
@@ -1729,22 +1927,90 @@ async function loadUserReports() {
   const data = accessSnap.exists ? accessSnap.data() : {};
   const ids = data.reportIds || [];
   myAccessOptions = data.options || {};
+  await loadFolders();   // el cliente también lee las carpetas para poder navegar
   if (!ids.length) {
+    _userReports = []; _userVisibleFolderIds = new Set(); _userFolderId = null;
     cont.innerHTML = emptyHTML('📭', 'No tenés informes asignados aún.<br>Contactá al administrador.');
     return;
   }
   const reports = await Promise.all(
     ids.map(async id => { const d = await db.collection('reports').doc(id).get(); return d.exists ? {id,...d.data()} : null; })
   ).then(rs => rs.filter(Boolean));
+  // Si el folderId apunta a una carpeta inexistente (p. ej. borrada), lo tratamos como raíz.
+  reports.forEach(r => { if (r.folderId && !folderById(r.folderId)) r.folderId = null; });
+  _userReports = reports;
+  // Carpetas visibles = todas las que están en el camino hacia algún informe asignado.
+  const vis = new Set();
+  reports.forEach(r => {
+    let fid = r.folderId || null;
+    const seen = new Set();
+    while (fid && !seen.has(fid)) { seen.add(fid); vis.add(fid); fid = folderById(fid) ? (folderById(fid).parentId || null) : null; }
+  });
+  _userVisibleFolderIds = vis;
+  _userFolderId = null;
   if (!reports.length) { cont.innerHTML = emptyHTML('📭', 'No hay informes disponibles.'); return; }
-  cont.innerHTML = `<div class="report-grid">
-    ${reports.map(r => `
+  renderUserLevel();
+}
+
+// Cuántos elementos visibles hay directamente dentro de una carpeta
+// (subcarpetas visibles + informes asignados en ese nivel).
+function countAccessibleInFolder(folderId) {
+  const subs = childFolders(folderId).filter(f => _userVisibleFolderIds.has(f.id)).length;
+  const reps = _userReports.filter(r => (r.folderId || null) === folderId).length;
+  return subs + reps;
+}
+
+function userBreadcrumbHTML() {
+  const chain = [];
+  let cur = _userFolderId ? folderById(_userFolderId) : null;
+  const seen = new Set();
+  while (cur && !seen.has(cur.id)) { seen.add(cur.id); chain.unshift(cur); cur = cur.parentId ? folderById(cur.parentId) : null; }
+  let html = `<div class="breadcrumb"><a onclick="enterFolder(null)">🏠 Inicio</a>`;
+  chain.forEach((f, i) => {
+    html += `<span class="sep">›</span>`;
+    html += (i === chain.length - 1)
+      ? `<span class="current">📁 ${esc(f.name)}</span>`
+      : `<a onclick="enterFolder('${f.id}')">📁 ${esc(f.name)}</a>`;
+  });
+  return html + `</div>`;
+}
+
+function enterFolder(id) { _userFolderId = id || null; renderUserLevel(); }
+
+function renderUserLevel() {
+  const cont = el('user-reports-container');
+  const here = _userFolderId || null;
+  const subfolders = childFolders(here).filter(f => _userVisibleFolderIds.has(f.id));
+  const reportsHere = _userReports
+    .filter(r => (r.folderId || null) === here)
+    .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'es'));
+
+  // En la raíz sin ninguna carpeta, se ve igual que la grilla plana de antes.
+  const crumbs = (here === null && !subfolders.length) ? '' : userBreadcrumbHTML();
+
+  if (!subfolders.length && !reportsHere.length) {
+    cont.innerHTML = crumbs + emptyHTML('📁', 'Esta carpeta está vacía.');
+    return;
+  }
+
+  const folderCards = subfolders.map(f => {
+    const n = countAccessibleInFolder(f.id);
+    return `
+    <div class="report-card" onclick="enterFolder('${f.id}')">
+      <div class="report-card-icon">📁</div>
+      <h3>${esc(f.name)}</h3>
+      <div class="meta">${n} ${n === 1 ? 'elemento' : 'elementos'}</div>
+    </div>`;
+  }).join('');
+
+  const reportCards = reportsHere.map(r => `
     <div class="report-card" onclick="openUserReport('${r.storagePath}','${esc(r.name)}','${r.id}')">
       <div class="report-card-icon">${fileIcon(r.name)}</div>
       <h3>${esc(r.name)}</h3>
       <div class="meta">${fmtSize(r.size)} · ${fmtDate(r.createdAt)}</div>
-    </div>`).join('')}
-  </div>`;
+    </div>`).join('');
+
+  cont.innerHTML = crumbs + `<div class="report-grid">${folderCards}${reportCards}</div>`;
 }
 
 async function openUserReport(storagePath, name, reportId) {
