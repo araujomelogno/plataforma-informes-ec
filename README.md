@@ -249,7 +249,8 @@ En **Panel Admin → Métricas** se registra cada acceso al portal:
 Cómo funciona:
 
 - Cada carga autenticada crea un documento en la colección `sessions` de Firestore.
-- La **duración** se estima con un "latido" (`lastSeenAt`) que se actualiza cada 60 s mientras la pestaña está visible, más el cierre al hacer *Cerrar sesión* o dejar la página. (No se puede medir con exactitud al milisegundo en una web sin backend; es una estimación robusta.)
+- La **duración** se estima con un "latido" (`lastSeenAt`) que se actualiza cada 60 s **mientras la pestaña está visible y hubo actividad del usuario** en los últimos 5 minutos, más el cierre al hacer *Cerrar sesión* o dejar la página. (No se puede medir con exactitud al milisegundo en una web sin backend; es una estimación robusta.)
+- **Timeout por inactividad:** si el usuario deja la pestaña abierta pero sin usarla, el latido se **pausa** a los ~5 minutos y la sesión deja de sumar tiempo (se reanuda al volver a interactuar). Además, cada sesión tiene un **tope de duración** (por defecto **2 h**) al calcular las métricas, para que pestañas olvidadas abiertas no inflen los totales. Ambos límites se pueden ajustar en `index.html` (`IDLE_LIMIT_MS` y `MAX_SESSION_MS`).
 - La **IP** se obtiene de un servicio público (`api.ipify.org`) al iniciar la sesión. Si ese servicio no responde, la IP queda vacía.
 
 Requiere **publicar las reglas de Firestore** actualizadas (incluyen la colección `sessions`): pegá el contenido de `firestore.rules` en Firebase Console → Firestore → Reglas → Publicar. Solo el admin puede leer las métricas.
