@@ -620,6 +620,9 @@
       <button class="nav-item" id="nav-metrics" onclick="switchTab('metrics', this)">
         <span class="nav-icon">📊</span> Métricas
       </button>
+      <button class="nav-item" id="nav-clientdocs" onclick="switchTab('clientdocs', this)">
+        <span class="nav-icon">📥</span> Docs de clientes
+      </button>
 
       <div class="sidebar-footer">
         <div class="user-pill">
@@ -839,6 +842,24 @@
         </div>
       </div>
 
+      <div id="tab-clientdocs" class="hidden">
+        <div class="page-header">
+          <div class="accent-bar"></div>
+          <h2>Documentos subidos por el <span class="accent">cliente</span></h2>
+          <p>Archivos que los usuarios cliente subieron desde su portal</p>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <span class="card-header-title">Documentos de clientes</span>
+            <span class="count-chip" id="clientdocs-count">0</span>
+          </div>
+          <div style="padding:.9rem 1.25rem 0">
+            <input type="text" id="clientdocs-filter" placeholder="🔎 Filtrar por nombre o email…" oninput="renderClientDocsTable()" style="width:100%;max-width:380px" />
+          </div>
+          <div id="clientdocs-table"><div class="loading">Cargando documentos...</div></div>
+        </div>
+      </div>
+
     </div>
   </div>
 </template>
@@ -871,6 +892,41 @@
       </div>
       <div id="user-reports-container">
         <div class="loading">Cargando informes...</div>
+      </div>
+
+      <div class="page-header" style="margin-top:2.5rem">
+        <div class="accent-bar"></div>
+        <h2>Documentos subidos por el <span class="accent">cliente</span></h2>
+        <p>Subí tus propios documentos. Los verá el administrador.</p>
+      </div>
+      <div class="card">
+        <div class="card-header"><span class="card-header-title">Subir un documento</span></div>
+        <div class="card-body">
+          <div class="upload-zone" id="client-upload-area"
+            onclick="document.getElementById('client-file-input').click()"
+            ondragover="handleClientDragOver(event)"
+            ondrop="handleClientDrop(event)"
+            ondragleave="handleClientDragLeave(event)">
+            <div class="upload-icon">📤</div>
+            <p><strong>Hacé clic para subir</strong> o arrastrá archivos aquí</p>
+            <p class="hint">HTML, PDF, Word, PowerPoint y video (.mp4/.webm/.mov) · Podés subir varios a la vez</p>
+          </div>
+          <input type="file" id="client-file-input" accept=".html,.htm,.pdf,.doc,.docx,.ppt,.pptx,.mp4,.webm,.ogg,.ogv,.mov,.m4v" multiple class="hidden" onchange="handleClientFileSelect(event)" />
+          <div id="client-upload-progress" class="hidden progress-wrap">
+            <div class="progress-meta">
+              <span id="client-upload-status">Subiendo...</span>
+              <span id="client-upload-pct">0%</span>
+            </div>
+            <div class="progress"><div class="progress-bar" id="client-progress-bar" style="width:0%"></div></div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <span class="card-header-title">Mis documentos subidos</span>
+          <span class="count-chip" id="client-docs-count">0</span>
+        </div>
+        <div id="client-docs-list"><div class="loading">Cargando...</div></div>
       </div>
     </div>
   </div>
@@ -1057,16 +1113,19 @@ async function renderUser() {
   el('user-sidebar-email').textContent = currentUser.email;
   el('user-avatar').textContent        = currentUser.email[0].toUpperCase();
   await loadUserReports();
+  await loadMyClientDocs();
+  renderMyClientDocs();
 }
 
 /* ── TABS ── */
 function switchTab(tab, btn) {
-  ['reports','users','permissions','metrics'].forEach(t =>
+  ['reports','users','permissions','metrics','clientdocs'].forEach(t =>
     el('tab-'+t).classList.toggle('hidden', t !== tab));
   document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   if (tab === 'permissions') populatePermSelect();
   if (tab === 'metrics') { loadMetrics(); loadDashboardAnalytics(); }
+  if (tab === 'clientdocs') loadClientDocs();
 }
 
 /* ── REPORTS ── */
@@ -2260,6 +2319,174 @@ async function openUserReport(storagePath, name, reportId) {
   } finally {
     hideLoadingOverlay();
   }
+}
+
+/* ── Documentos subidos por el CLIENTE ── */
+// Colección 'clientDocs' { name, storagePath, size, ext, ownerUid, ownerEmail, createdAt }.
+// El cliente sube a clientDocs/{uid}/… y ve/borra solo los suyos; el admin ve/borra todos.
+let myClientDocs = [];     // documentos del cliente actual (vista de usuario)
+let allClientDocs = [];    // todos (vista admin)
+
+function handleClientDragOver(e) { e.preventDefault(); el('client-upload-area').classList.add('drag'); }
+function handleClientDragLeave() { el('client-upload-area').classList.remove('drag'); }
+function handleClientDrop(e) {
+  e.preventDefault(); el('client-upload-area').classList.remove('drag');
+  const files = [...e.dataTransfer.files].filter(f => isAllowed(f.name));
+  if (files.length) uploadClientFiles(files);
+}
+function handleClientFileSelect(e) {
+  if (e.target.files.length) uploadClientFiles([...e.target.files]);
+  e.target.value = '';
+}
+
+async function uploadClientFiles(files) {
+  const rejected = files.filter(f => !isAllowed(f.name));
+  files = files.filter(f => isAllowed(f.name));
+  if (rejected.length)
+    alert('Se ignoraron archivos con formato no soportado:\n' + rejected.map(f => f.name).join('\n') +
+          '\n\nFormatos permitidos: HTML, PDF, DOC, DOCX, PPT, PPTX y video.');
+  if (!files.length) return;
+
+  el('client-upload-progress').classList.remove('hidden');
+  const bar = el('client-progress-bar');
+  const statusEl = el('client-upload-status');
+
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    statusEl.textContent = `Subiendo ${i+1}/${files.length}: ${file.name}`;
+    statusEl.style.color = '';
+    el('client-upload-pct').textContent = '0%';
+    bar.style.width = '0%'; bar.style.background = 'var(--orange)';
+
+    const path = `clientDocs/${currentUser.uid}/${Date.now()}_${file.name}`;
+    try {
+      const task = storage.ref(path).put(file, { contentType: file.type || guessContentType(file.name) });
+      await new Promise((res, rej) => {
+        task.on('state_changed',
+          s => {
+            const pct = Math.round(s.bytesTransferred / s.totalBytes * 100);
+            bar.style.width = pct + '%'; el('client-upload-pct').textContent = pct + '%';
+          },
+          err => { console.error('Client upload error:', err); rej(err); },
+          async () => {
+            try {
+              await db.collection('clientDocs').add({
+                name: file.name, storagePath: path, size: file.size, ext: extOf(file.name),
+                ownerUid: currentUser.uid, ownerEmail: currentUser.email,
+                createdAt: firebase.firestore.FieldValue.serverTimestamp()
+              });
+              res();
+            } catch (e) { console.error('Firestore write error:', e); rej(e); }
+          }
+        );
+      });
+    } catch (err) {
+      bar.style.background = '#B83A26'; bar.style.width = '100%';
+      let msg = '❌ Error al subir';
+      if (err.code === 'storage/unauthorized')   msg = '❌ Sin permisos para subir — revisá las reglas de Storage';
+      else if (err.code === 'permission-denied') msg = '❌ Firestore bloqueó la escritura';
+      else if (err.code)                         msg = `❌ Error: ${err.code}`;
+      else                                       msg = `❌ Error: ${err.message || 'desconocido'}`;
+      statusEl.textContent = msg; statusEl.style.color = '#B83A26';
+      alert(msg + '\n\nDetalle técnico (también en consola F12):\n' + (err.code || '') + '\n' + (err.message || err));
+      return;
+    }
+  }
+  statusEl.textContent = '✅ ¡Documento(s) subido(s) correctamente!';
+  bar.style.width = '100%'; el('client-upload-pct').textContent = '100%';
+  await loadMyClientDocs(); renderMyClientDocs();
+  setTimeout(() => el('client-upload-progress').classList.add('hidden'), 3000);
+}
+
+async function loadMyClientDocs() {
+  try {
+    const snap = await db.collection('clientDocs').where('ownerUid', '==', currentUser.uid).get();
+    myClientDocs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const ms = ts => (ts && ts.toMillis) ? ts.toMillis() : 0;
+    myClientDocs.sort((a, b) => ms(b.createdAt) - ms(a.createdAt));
+  } catch { myClientDocs = []; }
+}
+
+function renderMyClientDocs() {
+  const cont = el('client-docs-list'); if (!cont) return;
+  const cnt = el('client-docs-count'); if (cnt) cnt.textContent = myClientDocs.length;
+  if (!myClientDocs.length) { cont.innerHTML = emptyHTML('📤', 'Todavía no subiste documentos.'); return; }
+  cont.innerHTML = `
+    <table>
+      <thead><tr><th>Nombre</th><th>Tamaño</th><th>Fecha</th><th>Acciones</th></tr></thead>
+      <tbody>
+        ${myClientDocs.map(d => `
+        <tr>
+          <td style="font-weight:600">${fileIcon(d.name)} ${esc(d.name)}</td>
+          <td style="color:var(--gray)">${fmtSize(d.size)}</td>
+          <td style="color:var(--gray)">${fmtDate(d.createdAt)}</td>
+          <td><div class="td-actions">
+            <button class="btn btn-outline btn-sm" onclick="previewReport('${d.storagePath}','${esc(d.name)}')">👁 Ver</button>
+            <button class="btn btn-danger btn-sm" onclick="deleteMyClientDoc('${d.id}','${d.storagePath}')">🗑</button>
+          </div></td>
+        </tr>`).join('')}
+      </tbody>
+    </table>`;
+}
+
+async function deleteMyClientDoc(id, storagePath) {
+  if (!confirm('¿Borrar este documento? Esta acción no se puede deshacer.')) return;
+  try {
+    try { await storage.ref(storagePath).delete(); } catch {}
+    await db.collection('clientDocs').doc(id).delete();
+    await loadMyClientDocs(); renderMyClientDocs();
+  } catch (e) { alert('No se pudo borrar: ' + (e.message || e)); }
+}
+
+async function loadClientDocs() {
+  const cont = el('clientdocs-table');
+  try {
+    const snap = await db.collection('clientDocs').get();
+    allClientDocs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const ms = ts => (ts && ts.toMillis) ? ts.toMillis() : 0;
+    allClientDocs.sort((a, b) => ms(b.createdAt) - ms(a.createdAt));
+  } catch (e) {
+    allClientDocs = [];
+    if (cont) cont.innerHTML = `<div class="alert alert-error" style="margin:1rem 1.25rem">No se pudieron cargar los documentos: ${esc(e.message || String(e))}</div>`;
+    return;
+  }
+  renderClientDocsTable();
+}
+
+function renderClientDocsTable() {
+  const cont = el('clientdocs-table'); if (!cont) return;
+  const cnt = el('clientdocs-count'); if (cnt) cnt.textContent = allClientDocs.length;
+  if (!allClientDocs.length) { cont.innerHTML = emptyHTML('📥', 'Ningún cliente subió documentos todavía.'); return; }
+  const f = (el('clientdocs-filter') && el('clientdocs-filter').value || '').trim().toLowerCase();
+  const rows = f ? allClientDocs.filter(d =>
+    String(d.name || '').toLowerCase().includes(f) || String(d.ownerEmail || '').toLowerCase().includes(f)) : allClientDocs;
+  if (!rows.length) { cont.innerHTML = emptyHTML('🔎', 'Ningún documento coincide con la búsqueda.'); return; }
+  cont.innerHTML = `
+    <table>
+      <thead><tr><th>Nombre</th><th>Cliente</th><th>Tamaño</th><th>Fecha</th><th>Acciones</th></tr></thead>
+      <tbody>
+        ${rows.map(d => `
+        <tr>
+          <td style="font-weight:600">${fileIcon(d.name)} ${esc(d.name)}</td>
+          <td>${esc(d.ownerEmail || '—')}</td>
+          <td style="color:var(--gray)">${fmtSize(d.size)}</td>
+          <td style="color:var(--gray)">${fmtDate(d.createdAt)}</td>
+          <td><div class="td-actions">
+            <button class="btn btn-outline btn-sm" onclick="previewReport('${d.storagePath}','${esc(d.name)}')">👁 Ver</button>
+            <button class="btn btn-danger btn-sm" onclick="deleteClientDoc('${d.id}','${d.storagePath}')">🗑</button>
+          </div></td>
+        </tr>`).join('')}
+      </tbody>
+    </table>`;
+}
+
+async function deleteClientDoc(id, storagePath) {
+  if (!confirm('¿Borrar este documento subido por el cliente? Esta acción no se puede deshacer.')) return;
+  try {
+    try { await storage.ref(storagePath).delete(); } catch {}
+    await db.collection('clientDocs').doc(id).delete();
+    await loadClientDocs();
+  } catch (e) { alert('No se pudo borrar: ' + (e.message || e)); }
 }
 
 /* ── LOADING OVERLAY ── */

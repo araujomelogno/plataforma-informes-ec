@@ -13,5 +13,14 @@ service firebase.storage {
       allow write: if request.auth != null &&
         firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'admin';
     }
+
+    // Documentos subidos por los usuarios cliente: cada uno en su propia carpeta.
+    // El dueño (uid de la ruta) puede leer/escribir/borrar los suyos; el admin, todos.
+    match /clientDocs/{uid}/{fileName} {
+      allow read, write: if request.auth != null && (
+        request.auth.uid == uid ||
+        firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'admin'
+      );
+    }
   }
 }
