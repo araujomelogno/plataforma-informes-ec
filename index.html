@@ -551,6 +551,14 @@
     }
     .modal-title { font-size: 0.95rem; font-weight: 800; color: var(--dark); word-break: break-word; }
     .modal-body { padding: 1.1rem 1.25rem; }
+    /* Verificación en dos pasos (2FA) */
+    .mfa-box { text-align: center; }
+    .mfa-box h2 { font-size: 1.2rem; font-weight: 800; color: var(--dark); margin: 0 0 .35rem; }
+    .mfa-sub { font-size: .85rem; color: var(--gray); font-weight: 500; margin: 0 0 1rem; }
+    .mfa-qr { display: flex; justify-content: center; margin: 0 0 .7rem; }
+    .mfa-qr img, .mfa-qr canvas { border: 1px solid var(--border); border-radius: 6px; }
+    .mfa-secret { font-size: .78rem; color: var(--gray); margin: .1rem 0 1rem; }
+    #mfa-code { text-align: center; letter-spacing: .4em; font-size: 1.2rem; font-weight: 700; margin-bottom: .8rem; }
 
     .hidden { display: none !important; }
   </style>
@@ -984,14 +992,130 @@ auth.onAuthStateChanged(async (user) => {
     }
     currentUser = user;
     currentUserData = snap.data();
-    currentUserData.role === 'admin' ? renderAdmin() : renderUser();
-    startSession();   // registra el acceso (una vez por carga autenticada)
+    // 2FA: si el admin lo exige y el usuario todavía no enroló un segundo factor,
+    // lo obligamos a activarlo antes de entrar al portal.
+    const enrolled = (user.multiFactor && user.multiFactor.enrolledFactors) || [];
+    if (currentUserData.mfaRequired && enrolled.length === 0) { startMfaEnrollment(); return; }
+    enterPortal();
   } else {
     stopHeartbeat(); currentSessionId = null;
     currentUser = null; currentUserData = null;
     renderLogin();
   }
 });
+
+// Entra al portal una vez superados el login y (si aplica) el segundo factor.
+function enterPortal() {
+  currentUserData.role === 'admin' ? renderAdmin() : renderUser();
+  startSession();   // registra el acceso (una vez por carga autenticada)
+}
+
+/* ── 2FA (verificación en dos pasos, TOTP) ──
+   El admin marca users/{uid}.mfaRequired. Firebase (Identity Platform) hace el
+   enforcement real: una vez que el usuario enrola un factor TOTP, el login exige
+   el código. Si es requerido pero aún no enroló, forzamos el enrolamiento. */
+let _mfaResolver = null, _mfaSecret = null;
+
+function openMfaModal(html) {
+  closeMfaModal();
+  const m = document.createElement('div');
+  m.className = 'modal-backdrop'; m.id = 'mfa-modal';   // sin dismiss por backdrop: bloqueante
+  m.innerHTML = `<div class="modal-box" style="max-width:430px"><div class="modal-body" id="mfa-modal-body">${html}</div></div>`;
+  document.body.appendChild(m);
+}
+function setMfaModalBody(html) { const b = el('mfa-modal-body'); if (b) b.innerHTML = html; }
+function closeMfaModal() { const m = el('mfa-modal'); if (m) m.remove(); }
+function cancelMfa() { _mfaResolver = null; _mfaSecret = null; closeMfaModal(); auth.signOut(); }
+
+async function renderQr(containerId, text) {
+  const box = el(containerId); if (!box) return;
+  box.innerHTML = '';
+  try {
+    await loadScript('https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js');
+    new QRCode(box, { text: text, width: 200, height: 200 });
+  } catch (e) {
+    box.innerHTML = `<p class="mfa-secret">Escaneá esta URL en tu app:<br><code style="word-break:break-all">${esc(text)}</code></p>`;
+  }
+}
+
+// Desafío en el login: el usuario ya tiene 2FA → pedimos el código de 6 dígitos.
+function startMfaChallenge(error) {
+  if (!(firebase.auth && firebase.auth.TotpMultiFactorGenerator)) {
+    showAlert('login-alert', 'error', '❌ Este proyecto no tiene habilitada la verificación en dos pasos.');
+    return;
+  }
+  _mfaResolver = (auth.getMultiFactorResolver ? auth.getMultiFactorResolver(error) : error.resolver);
+  openMfaModal(`
+    <div class="mfa-box">
+      <div class="accent-bar" style="margin:0 auto .8rem"></div>
+      <h2>Verificación en dos pasos</h2>
+      <p class="mfa-sub">Ingresá el código de 6 dígitos de tu app de autenticación.</p>
+      <div id="mfa-alert"></div>
+      <input type="text" id="mfa-code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000" />
+      <button class="btn btn-orange btn-full" onclick="submitMfaChallenge()">Verificar</button>
+      <button class="btn btn-outline btn-full" style="margin-top:.5rem" onclick="cancelMfa()">Cancelar</button>
+    </div>`);
+  setTimeout(() => { const i = el('mfa-code'); if (i) { i.focus(); i.addEventListener('keydown', e => e.key === 'Enter' && submitMfaChallenge()); } }, 60);
+}
+async function submitMfaChallenge() {
+  const code = (v('mfa-code') || '').replace(/\D/g, '');
+  if (!/^\d{6}$/.test(code)) return showAlert('mfa-alert', 'error', '❌ Ingresá los 6 dígitos.');
+  try {
+    const T = firebase.auth.TotpMultiFactorGenerator;
+    const hint = _mfaResolver.hints.find(h => h.factorId === T.FACTOR_ID) || _mfaResolver.hints[0];
+    const assertion = T.assertionForSignIn(hint.uid, code);
+    await _mfaResolver.resolveSignIn(assertion);
+    _mfaResolver = null;
+    closeMfaModal();   // onAuthStateChanged continúa al portal
+  } catch (e) {
+    showAlert('mfa-alert', 'error', '❌ Código incorrecto o vencido. Probá de nuevo.');
+  }
+}
+
+// Enrolamiento forzado: el usuario debe activar 2FA para poder entrar.
+async function startMfaEnrollment() {
+  if (!(firebase.auth && firebase.auth.TotpMultiFactorGenerator)) {
+    // Sin Identity Platform no se puede; dejamos entrar para no bloquear el portal.
+    enterPortal(); return;
+  }
+  openMfaModal('<div class="mfa-box"><div class="loading">Generando código…</div></div>');
+  try {
+    const mfaUser = auth.currentUser;
+    const session = await mfaUser.multiFactor.getSession();
+    _mfaSecret = await firebase.auth.TotpMultiFactorGenerator.generateSecret(session);
+    const otpUrl = _mfaSecret.generateQrCodeUrl(currentUser.email, 'Equipos Consultores');
+    setMfaModalBody(`
+      <div class="mfa-box">
+        <div class="accent-bar" style="margin:0 auto .8rem"></div>
+        <h2>Activá la verificación en dos pasos</h2>
+        <p class="mfa-sub">Tu cuenta requiere 2FA. Escaneá el código con Google Authenticator (o similar) y luego ingresá el código de 6 dígitos.</p>
+        <div id="mfa-qr" class="mfa-qr"></div>
+        <p class="mfa-secret">¿No podés escanear? Clave manual: <code>${esc(_mfaSecret.secretKey)}</code></p>
+        <div id="mfa-alert"></div>
+        <input type="text" id="mfa-code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000" />
+        <button class="btn btn-orange btn-full" onclick="submitMfaEnrollment()">Activar 2FA</button>
+        <button class="btn btn-outline btn-full" style="margin-top:.5rem" onclick="cancelMfa()">Cerrar sesión</button>
+      </div>`);
+    await renderQr('mfa-qr', otpUrl);
+  } catch (e) {
+    setMfaModalBody(`<div class="mfa-box"><div class="alert alert-error">No se pudo iniciar la activación de 2FA: ${esc(e.message || String(e))}</div>
+      <button class="btn btn-outline btn-full" style="margin-top:1rem" onclick="cancelMfa()">Cerrar sesión</button></div>`);
+  }
+}
+async function submitMfaEnrollment() {
+  const code = (v('mfa-code') || '').replace(/\D/g, '');
+  if (!/^\d{6}$/.test(code)) return showAlert('mfa-alert', 'error', '❌ Ingresá los 6 dígitos.');
+  try {
+    const assertion = firebase.auth.TotpMultiFactorGenerator.assertionForEnrollment(_mfaSecret, code);
+    await auth.currentUser.multiFactor.enroll(assertion, 'App de autenticación');
+    _mfaSecret = null;
+    try { await db.collection('users').doc(currentUser.uid).update({ mfaEnrolled: true }); } catch (e) {}
+    closeMfaModal();
+    enterPortal();
+  } catch (e) {
+    showAlert('mfa-alert', 'error', '❌ Código incorrecto o vencido. Probá de nuevo.');
+  }
+}
 
 // Arranque del modo enlace público (no requiere login).
 if (_publicMode) renderPublicView(_publicToken);
@@ -1054,7 +1178,9 @@ async function doLogin() {
   clearAlert('login-alert');
   try {
     await auth.signInWithEmailAndPassword(email, pass);
-  } catch {
+  } catch (err) {
+    // El usuario tiene 2FA: Firebase pide el segundo factor antes de emitir el token.
+    if (err && err.code === 'auth/multi-factor-auth-required') { startMfaChallenge(err); return; }
     showAlert('login-alert', 'error', '❌ Email o contraseña incorrectos');
   }
 }
@@ -1913,6 +2039,8 @@ function renderUsersTable() {
             `<button class="btn btn-outline btn-sm" onclick="goToUserPerms('${u.id}')">🔐 Permisos</button>`;
           const paramsBtn = isAdmin ? '' :
             `<button class="btn btn-outline btn-sm" onclick="openUserParamsModal('${u.id}','${esc(u.email)}')">⚙️ Parámetros</button>`;
+          const mfaLabel = u.mfaRequired ? (u.mfaEnrolled ? '🔒 2FA activa' : '🔒 2FA (pendiente)') : '🔓 2FA: no';
+          const mfaBtn = `<button class="btn btn-outline btn-sm" onclick="toggle2FA('${u.id}','${esc(u.email)}',${u.mfaRequired ? 'false' : 'true'})" title="Verificación en dos pasos">${mfaLabel}</button>`;
           const delBtn = isSelf ? '' :
             `<button class="btn btn-danger btn-sm" onclick="deleteUser('${u.id}','${esc(u.email)}')">🗑 Borrar</button>`;
           return `
@@ -1923,6 +2051,7 @@ function renderUsersTable() {
           <td><div class="td-actions">
             ${permBtn}
             ${paramsBtn}
+            ${mfaBtn}
             <button class="btn btn-outline btn-sm" onclick="showUserAccess('${u.id}','${esc(u.email)}')">👁 Accesos</button>
             <button class="btn btn-outline btn-sm" onclick="resetUserPassword('${esc(u.email)}')">🔑 Restablecer contraseña</button>
             ${roleBtn}
@@ -1932,6 +2061,22 @@ function renderUsersTable() {
         }).join('')}
       </tbody>
     </table>`;
+}
+
+// Exigir (o no) verificación en dos pasos a un usuario. El enforcement real lo
+// hace Firebase una vez que el usuario enrola; este flag fuerza ese enrolamiento.
+async function toggle2FA(uid, email, on) {
+  const msg = on
+    ? `¿Exigir verificación en dos pasos (2FA) a "${email}"?\n\nEn su próximo ingreso deberá configurar una app de autenticación (Google Authenticator o similar).`
+    : `¿Dejar de exigir 2FA a "${email}"?\n\nNota: si el usuario ya la activó, Firebase seguirá pidiéndole el código hasta que él la desactive o se quite desde Firebase Console → Authentication.`;
+  if (!confirm(msg)) return;
+  try {
+    await db.collection('users').doc(uid).update({ mfaRequired: on });
+    await loadUsers();
+    renderUsersTable();
+  } catch (e) {
+    alert('No se pudo cambiar el 2FA: ' + (e.message || e));
+  }
 }
 
 async function changeRole(uid, email, newRole) {
