@@ -222,6 +222,41 @@ asignado a él.
 
 ---
 
+## 🔐 Verificación en dos pasos (2FA / TOTP)
+
+El portal soporta **2FA con app de autenticación** (Google Authenticator, Authy, etc.),
+que el administrador exige **por usuario**. El enforcement lo hace Firebase
+(no es una barrera "de fachada"): una vez que el usuario enrola su factor, el
+ingreso exige el código de 6 dígitos antes de emitir el token.
+
+### Requisito: habilitar MFA (TOTP) en Firebase — una sola vez
+
+La MFA requiere **Identity Platform** (plan **Blaze**). En **Firebase Console →
+Authentication → Settings (Configuración) → Multi-factor authentication**,
+habilitá **TOTP / App de autenticación**. (Esto "actualiza" Authentication a
+Identity Platform; con Blaze activo, el uso normal de un portal interno suele
+quedar en el tramo gratuito.)
+
+### Cómo se usa
+
+1. En **Panel Admin → Usuarios**, cada usuario tiene un botón **🔓 2FA: no /
+   🔒 2FA**. Tocalo para **exigir** 2FA a ese usuario (se guarda en
+   `users/{uid}.mfaRequired`).
+2. La **próxima vez que ese usuario ingrese**, el portal lo obliga a **activar**
+   la app de autenticación: muestra un **QR** para escanear y pide el primer
+   código de 6 dígitos.
+3. En los ingresos siguientes, tras email + contraseña, el portal pide el
+   **código** de la app.
+
+> Notas:
+> - **Desactivar 2FA:** quitar el flag desde el panel evita que se exija a futuro,
+>   pero si el usuario **ya lo activó**, Firebase seguirá pidiéndoselo hasta que él
+>   lo quite o lo elimines desde **Firebase Console → Authentication** (columna MFA).
+> - No requiere cambios en las reglas de Firestore/Storage (el flag vive en el
+>   doc del usuario, que el admin ya puede escribir).
+
+---
+
 ## ⚙️ Configurar CORS del bucket (requerido para el visor)
 
 Para que el navegador pueda **leer** los PDF/Word/PowerPoint y renderizarlos inline, el bucket de Storage necesita permitir CORS desde el dominio del portal. Se hace **una sola vez** con el archivo `cors.json` incluido:
