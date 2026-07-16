@@ -961,6 +961,7 @@ let myAccessOptions = {};   // opciones de protección del usuario actual: { rep
 // Navegación por carpetas del cliente
 let _userFolderId = null, _userReports = [], _userVisibleFolderIds = new Set();
 let currentSessionId = null, _hbTimer = null, _sessionStarting = false;   // métricas de acceso
+let _lastActivity = 0, _activityBound = false;   // detección de inactividad para el latido
 let _loginNotice = null;   // aviso a mostrar en la pantalla de login (ej. acceso denegado)
 
 // ── Modo "enlace público" ──
@@ -2801,10 +2802,34 @@ async function startSession() {
   } catch (e) { console.warn('No se pudo registrar la sesión:', e && e.message); }
   finally { _sessionStarting = false; }
 }
-function startHeartbeat() { stopHeartbeat(); _hbTimer = setInterval(touchSession, 60000); }
+// El latido solo suma tiempo mientras la pestaña está visible Y hubo actividad
+// del usuario en los últimos IDLE_LIMIT_MS. Así, una pestaña dejada abierta sin
+// uso deja de acumular tiempo (evita duraciones infladas). Al volver a
+// interactuar, el latido se reanuda.
+const HEARTBEAT_MS   = 60000;                // frecuencia del latido (1 min)
+const IDLE_LIMIT_MS  = 5 * 60 * 1000;        // inactividad tras la cual se pausa el conteo
+const MAX_SESSION_MS = 2 * 60 * 60 * 1000;   // tope de duración por sesión (saneo de métricas)
+
+function markActivity() { _lastActivity = Date.now(); }
+function bindActivity() {
+  if (_activityBound) return;
+  _activityBound = true;
+  ['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart', 'click'].forEach(ev =>
+    window.addEventListener(ev, markActivity, { passive: true }));
+  // Interacción dentro del iframe del informe (dashboards instrumentados) también cuenta.
+  window.addEventListener('message', markActivity);
+}
+
+function startHeartbeat() {
+  stopHeartbeat();
+  _lastActivity = Date.now();
+  bindActivity();
+  _hbTimer = setInterval(touchSession, HEARTBEAT_MS);
+}
 function stopHeartbeat() { if (_hbTimer) { clearInterval(_hbTimer); _hbTimer = null; } }
 function touchSession() {
   if (!currentSessionId || document.visibilityState !== 'visible') return;
+  if (Date.now() - _lastActivity > IDLE_LIMIT_MS) return;   // usuario inactivo → no sumamos tiempo
   db.collection('sessions').doc(currentSessionId)
     .update({ lastSeenAt: firebase.firestore.FieldValue.serverTimestamp() }).catch(() => {});
 }
@@ -2981,7 +3006,9 @@ function closeAccessModal() { const m = el('access-modal'); if (m) m.remove(); }
 function tsMs(ts) { return ts && ts.toDate ? ts.toDate().getTime() : (ts ? new Date(ts).getTime() : 0); }
 function sessionDuration(s) {
   const a = tsMs(s.startAt), b = tsMs(s.endAt) || tsMs(s.lastSeenAt);
-  return (a && b && b > a) ? (b - a) : 0;
+  let d = (a && b && b > a) ? (b - a) : 0;
+  if (d > MAX_SESSION_MS) d = MAX_SESSION_MS;   // tope: sesiones dejadas abiertas no inflan el total
+  return d;
 }
 function fmtDur(ms) {
   if (!ms) return '—';
