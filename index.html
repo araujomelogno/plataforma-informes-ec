@@ -441,6 +441,13 @@
     }
     .badge-admin { background: var(--orange); color: var(--white); }
     .badge-user  { background: var(--gray-light); color: var(--gray); }
+    /* Badge con la cantidad de usuarios con acceso a un informe */
+    .ucount-badge {
+      display: inline-block; margin-left: .45rem; vertical-align: middle;
+      font-size: .72rem; font-weight: 700; border-radius: 999px; padding: .08rem .5rem;
+      background: var(--gray-light); color: var(--gray); white-space: nowrap;
+    }
+    .ucount-badge.has { background: var(--orange-light); color: var(--orange-dark); }
 
     .count-chip {
       font-size: 0.7rem; font-weight: 700;
@@ -893,6 +900,7 @@ const storage = firebase.storage();
 
 let currentUser = null, currentUserData = null;
 let allReports = [], allUsers = [], allFolders = [];
+let reportAccessCounts = {};   // { reportId: cantidad de usuarios con acceso }
 let myAccessOptions = {};   // opciones de protección del usuario actual: { reportId: {watermark,noPrint,...} }
 // Navegación por carpetas del cliente
 let _userFolderId = null, _userReports = [], _userVisibleFolderIds = new Set();
@@ -1038,7 +1046,7 @@ async function renderAdmin() {
   inject('tpl-admin');
   el('admin-email').textContent  = currentUser.email;
   el('admin-avatar').textContent = currentUser.email[0].toUpperCase();
-  await Promise.all([loadReports(), loadUsers(), loadFolders()]);
+  await Promise.all([loadReports(), loadUsers(), loadFolders(), loadReportAccessCounts()]);
   renderReportsTable();
   renderUsersTable();
   renderFoldersTree();
@@ -1075,6 +1083,18 @@ async function loadReports() {
   } catch { allReports = []; }
 }
 
+// Cuenta, por informe, cuántos usuarios tienen acceso (leyendo userAccess una vez).
+async function loadReportAccessCounts() {
+  const counts = {};
+  try {
+    const snap = await db.collection('userAccess').get();
+    snap.docs.forEach(d => {
+      (d.data().reportIds || []).forEach(rid => { counts[rid] = (counts[rid] || 0) + 1; });
+    });
+  } catch { /* sin permisos / sin datos → contadores vacíos */ }
+  reportAccessCounts = counts;
+}
+
 function renderReportsTable() {
   el('reports-count').textContent = allReports.length;
   if (!allReports.length) {
@@ -1093,7 +1113,7 @@ function renderReportsTable() {
       <tbody>
         ${rows.map(r => `
         <tr>
-          <td style="font-weight:600">${fileIcon(r.name)} ${esc(r.name)}</td>
+          <td style="font-weight:600">${fileIcon(r.name)} ${esc(r.name)}${(() => { const n = reportAccessCounts[r.id] || 0; return `<span class="ucount-badge ${n ? 'has' : ''}" title="${n} usuario${n === 1 ? '' : 's'} con acceso">👤 ${n}</span>`; })()}</td>
           <td style="color:var(--gray)">${fmtSize(r.size)}</td>
           <td style="color:var(--gray)">${fmtDate(r.createdAt)}${r.updatedAt ? `<br><span style="font-size:.72rem" title="Última reescritura">✏️ ${fmtDate(r.updatedAt)}</span>` : ''}</td>
           <td><select class="fselect" style="min-width:150px;font-size:.8rem;padding:.4rem .5rem" onchange="moveReport('${r.id}', this.value)">${folderOptionsHTML(r.folderId || '')}</select></td>
@@ -1705,6 +1725,9 @@ async function toggleReportUser(uid, grant, cb) {
       const granted = st.users.filter(x => x.has).length;
       cnt.textContent = `${granted} con acceso · ${st.users.length} ${st.users.length === 1 ? 'usuario' : 'usuarios'}`;
     }
+    // Mantener el badge de la lista de informes en sincronía.
+    reportAccessCounts[st.reportId] = Math.max(0, (reportAccessCounts[st.reportId] || 0) + (grant ? 1 : -1));
+    renderReportsTable();
   } catch (e) {
     alert('No se pudo actualizar el acceso: ' + (e.message || e));
     if (cb) cb.checked = !grant;   // revertir el toggle
@@ -2020,7 +2043,9 @@ async function deleteUser(uid, email) {
     await db.collection('userAccess').doc(uid).delete().catch(() => {});
     await db.collection('users').doc(uid).delete();
     await loadUsers();
+    await loadReportAccessCounts();   // el usuario borrado tenía accesos → recontar
     renderUsersTable();
+    renderReportsTable();
     populatePermSelect();
   } catch (e) {
     alert('No se pudo borrar el usuario: ' + (e.message || e));
@@ -2110,6 +2135,8 @@ async function grantReportToUser(userId, reportId, grant) {
 async function togglePerm(userId, reportId, cb) {
   const on = cb.checked;
   const options = await grantReportToUser(userId, reportId, on);
+  // Mantener el badge de "usuarios con acceso" de la lista de informes.
+  reportAccessCounts[reportId] = Math.max(0, (reportAccessCounts[reportId] || 0) + (on ? 1 : -1));
   // Reflejar en la UI: activar/desactivar los toggles de protección
   const item = el('perm-' + reportId);
   if (item) {
