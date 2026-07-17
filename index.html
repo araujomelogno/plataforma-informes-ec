@@ -11,6 +11,17 @@
   <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-storage-compat.js"></script>
+  <!-- SDK MODULAR de Auth (misma versión) SOLO para 2FA/TOTP: el TOTP no existe en
+       el SDK compat. Interopera con la misma app por defecto que inicializa compat.
+       Expone window.__mfa una vez cargado. -->
+  <script type="module">
+    import { getAuth, multiFactor, TotpMultiFactorGenerator, getMultiFactorResolver, signInWithEmailAndPassword }
+      from 'https://www.gstatic.com/firebasejs/10.7.0/firebase-auth.js';
+    try {
+      window.__mfa = { auth: getAuth(), multiFactor, TotpMultiFactorGenerator, getMultiFactorResolver, signInWithEmailAndPassword };
+      window.dispatchEvent(new Event('mfa-ready'));
+    } catch (e) { console.error('No se pudo iniciar el módulo de 2FA:', e); }
+  </script>
   <style>
     /* ── Brand tokens (extraídos del PPTX de marca) ── */
     :root {
@@ -993,8 +1004,9 @@ auth.onAuthStateChanged(async (user) => {
     currentUser = user;
     currentUserData = snap.data();
     // 2FA: si el admin lo exige y el usuario todavía no enroló un segundo factor,
-    // lo obligamos a activarlo antes de entrar al portal.
-    const enrolled = (user.multiFactor && user.multiFactor.enrolledFactors) || [];
+    // lo obligamos a activarlo antes de entrar al portal. El listado de factores
+    // se consulta con el SDK modular (TOTP no está en compat).
+    const enrolled = mfaEnrolledFactors(user);
     if (currentUserData.mfaRequired && enrolled.length === 0) { startMfaEnrollment(); return; }
     enterPortal();
   } else {
@@ -1011,10 +1023,21 @@ function enterPortal() {
 }
 
 /* ── 2FA (verificación en dos pasos, TOTP) ──
-   El admin marca users/{uid}.mfaRequired. Firebase (Identity Platform) hace el
-   enforcement real: una vez que el usuario enrola un factor TOTP, el login exige
-   el código. Si es requerido pero aún no enroló, forzamos el enrolamiento. */
+   TOTP solo existe en el SDK MODULAR de Firebase (no en compat), por eso usamos
+   window.__mfa (cargado por el <script type="module"> del <head>, interoperando
+   con la misma app). El admin marca users/{uid}.mfaRequired; Firebase hace el
+   enforcement real: una vez enrolado el factor, el login exige el código. Si es
+   requerido y aún no enroló, forzamos el enrolamiento. */
 let _mfaResolver = null, _mfaSecret = null;
+
+// Factores enrolados del usuario, consultados con el SDK modular ([] si no hay).
+function mfaEnrolledFactors(user) {
+  try {
+    const m = window.__mfa;
+    if (m && m.auth && m.auth.currentUser) return m.multiFactor(m.auth.currentUser).enrolledFactors || [];
+  } catch (e) {}
+  return (user && user.multiFactor && user.multiFactor.enrolledFactors) || [];
+}
 
 function openMfaModal(html) {
   closeMfaModal();
@@ -1040,11 +1063,11 @@ async function renderQr(containerId, text) {
 
 // Desafío en el login: el usuario ya tiene 2FA → pedimos el código de 6 dígitos.
 function startMfaChallenge(error) {
-  if (!(firebase.auth && firebase.auth.TotpMultiFactorGenerator)) {
-    showAlert('login-alert', 'error', '❌ Este proyecto no tiene habilitada la verificación en dos pasos.');
+  if (!window.__mfa) {
+    showAlert('login-alert', 'error', '❌ No se pudo cargar el módulo de verificación en dos pasos. Recargá la página e intentá de nuevo.');
     return;
   }
-  _mfaResolver = (auth.getMultiFactorResolver ? auth.getMultiFactorResolver(error) : error.resolver);
+  _mfaResolver = window.__mfa.getMultiFactorResolver(window.__mfa.auth, error);
   openMfaModal(`
     <div class="mfa-box">
       <div class="accent-bar" style="margin:0 auto .8rem"></div>
@@ -1061,7 +1084,7 @@ async function submitMfaChallenge() {
   const code = (v('mfa-code') || '').replace(/\D/g, '');
   if (!/^\d{6}$/.test(code)) return showAlert('mfa-alert', 'error', '❌ Ingresá los 6 dígitos.');
   try {
-    const T = firebase.auth.TotpMultiFactorGenerator;
+    const T = window.__mfa.TotpMultiFactorGenerator;
     const hint = _mfaResolver.hints.find(h => h.factorId === T.FACTOR_ID) || _mfaResolver.hints[0];
     const assertion = T.assertionForSignIn(hint.uid, code);
     await _mfaResolver.resolveSignIn(assertion);
@@ -1074,15 +1097,22 @@ async function submitMfaChallenge() {
 
 // Enrolamiento forzado: el usuario debe activar 2FA para poder entrar.
 async function startMfaEnrollment() {
-  if (!(firebase.auth && firebase.auth.TotpMultiFactorGenerator)) {
-    // Sin Identity Platform no se puede; dejamos entrar para no bloquear el portal.
-    enterPortal(); return;
+  if (!window.__mfa) {
+    // Fail-closed: el 2FA es requerido pero el módulo no cargó → NO dejamos entrar.
+    openMfaModal(`<div class="mfa-box">
+      <div class="accent-bar" style="margin:0 auto .8rem"></div>
+      <h2>Verificación en dos pasos</h2>
+      <div class="alert alert-error">No se pudo cargar el módulo de seguridad (2FA). Revisá tu conexión y recargá la página.</div>
+      <button class="btn btn-orange btn-full" style="margin-top:.6rem" onclick="location.reload()">Recargar</button>
+      <button class="btn btn-outline btn-full" style="margin-top:.5rem" onclick="cancelMfa()">Cerrar sesión</button>
+    </div>`);
+    return;
   }
   openMfaModal('<div class="mfa-box"><div class="loading">Generando código…</div></div>');
   try {
-    const mfaUser = auth.currentUser;
-    const session = await mfaUser.multiFactor.getSession();
-    _mfaSecret = await firebase.auth.TotpMultiFactorGenerator.generateSecret(session);
+    const mfa = window.__mfa.multiFactor(window.__mfa.auth.currentUser);
+    const session = await mfa.getSession();
+    _mfaSecret = await window.__mfa.TotpMultiFactorGenerator.generateSecret(session);
     const otpUrl = _mfaSecret.generateQrCodeUrl(currentUser.email, 'Equipos Consultores');
     setMfaModalBody(`
       <div class="mfa-box">
@@ -1106,8 +1136,8 @@ async function submitMfaEnrollment() {
   const code = (v('mfa-code') || '').replace(/\D/g, '');
   if (!/^\d{6}$/.test(code)) return showAlert('mfa-alert', 'error', '❌ Ingresá los 6 dígitos.');
   try {
-    const assertion = firebase.auth.TotpMultiFactorGenerator.assertionForEnrollment(_mfaSecret, code);
-    await auth.currentUser.multiFactor.enroll(assertion, 'App de autenticación');
+    const assertion = window.__mfa.TotpMultiFactorGenerator.assertionForEnrollment(_mfaSecret, code);
+    await window.__mfa.multiFactor(window.__mfa.auth.currentUser).enroll(assertion, 'App de autenticación');
     _mfaSecret = null;
     try { await db.collection('users').doc(currentUser.uid).update({ mfaEnrolled: true }); } catch (e) {}
     closeMfaModal();
@@ -1177,7 +1207,11 @@ async function doLogin() {
   const email = v('login-email'), pass = v('login-pass');
   clearAlert('login-alert');
   try {
-    await auth.signInWithEmailAndPassword(email, pass);
+    // Firmamos con el SDK modular cuando está disponible: así el error de MFA es
+    // resoluble con getMultiFactorResolver (modular). El listener onAuthStateChanged
+    // (compat) igual se dispara porque comparten la misma app.
+    if (window.__mfa) await window.__mfa.signInWithEmailAndPassword(window.__mfa.auth, email, pass);
+    else await auth.signInWithEmailAndPassword(email, pass);
   } catch (err) {
     // El usuario tiene 2FA: Firebase pide el segundo factor antes de emitir el token.
     if (err && err.code === 'auth/multi-factor-auth-required') { startMfaChallenge(err); return; }
