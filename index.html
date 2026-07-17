@@ -2435,7 +2435,8 @@ function goToUserPerms(userId) {
 function populatePermSelect() {
   const sel = el('perm-user-select'); if (!sel) return;
   const prev = sel.value;
-  const nonAdmins = allUsers.filter(u => u.role !== 'admin');
+  const nonAdmins = allUsers.filter(u => u.role !== 'admin')
+    .sort((a, b) => String(a.email || '').localeCompare(String(b.email || ''), 'es', { sensitivity: 'base' }));
   sel.innerHTML = '<option value="">— Elegí un usuario —</option>' +
     nonAdmins.map(u => `<option value="${u.id}" ${u.id===prev?'selected':''}>${esc(u.email)}</option>`).join('');
   if (prev && sel.value === prev) loadUserPermissions();
