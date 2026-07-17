@@ -255,6 +255,19 @@ quedar en el tramo gratuito.)
 > - No requiere cambios en las reglas de Firestore/Storage (el flag vive en el
 >   doc del usuario, que el admin ya puede escribir).
 
+### Detalle técnico (SDK modular)
+
+El TOTP **sólo existe en el SDK modular** de Firebase (no en compat). Por eso el
+portal inicializa Firebase con el **SDK modular** (`firebase-app.js`,
+`firebase-auth.js`, `firebase-firestore.js`, `firebase-storage.js`) en el
+`<script type="module">` del `<head>`. Para no reescribir toda la app, ese
+módulo expone una **fachada con la misma forma que la API compat**
+(`auth`, `db`, `storage`, `firebase.firestore.FieldValue`) sobre **una sola
+app**, de modo que Auth, Firestore y Storage comparten el mismo token de sesión
+y el 2FA/TOTP funciona de verdad. Si el módulo no llega a cargar (sin conexión,
+CDN bloqueado), el portal muestra una pantalla de "No se pudo cargar Firebase"
+en lugar de quedar en blanco.
+
 ---
 
 ## ⚙️ Configurar CORS del bucket (requerido para el visor)
