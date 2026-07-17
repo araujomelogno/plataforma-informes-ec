@@ -7,20 +7,127 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
-  <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-auth-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-storage-compat.js"></script>
-  <!-- SDK MODULAR de Auth (misma versión) SOLO para 2FA/TOTP: el TOTP no existe en
-       el SDK compat. Interopera con la misma app por defecto que inicializa compat.
-       Expone window.__mfa una vez cargado. -->
+  <!-- Firebase SDK MODULAR (v10.7.0). Usamos el SDK modular (NO compat) porque el
+       TOTP de la verificación en dos pasos (2FA) sólo existe en el SDK modular.
+       Para no reescribir las ~2000 líneas de la app, construimos una fachada con
+       la MISMA forma que la API compat (auth, db, storage, firebase.firestore.
+       FieldValue) sobre UNA sola app: así Auth, Firestore y Storage comparten el
+       mismo token de sesión y el 2FA/TOTP funciona de verdad. La config se toma
+       de window.firebaseConfig (definida en el <script> principal). -->
   <script type="module">
-    import { getAuth, multiFactor, TotpMultiFactorGenerator, getMultiFactorResolver, signInWithEmailAndPassword }
+    import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.0/firebase-app.js';
+    import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword,
+             sendPasswordResetEmail, signOut, multiFactor, TotpMultiFactorGenerator, getMultiFactorResolver }
       from 'https://www.gstatic.com/firebasejs/10.7.0/firebase-auth.js';
+    import { getFirestore, collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, addDoc,
+             query, where, orderBy, limit, writeBatch, serverTimestamp, increment, deleteField }
+      from 'https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore.js';
+    import { getStorage, ref as storageRef, uploadBytesResumable, getDownloadURL, deleteObject }
+      from 'https://www.gstatic.com/firebasejs/10.7.0/firebase-storage.js';
+
     try {
-      window.__mfa = { auth: getAuth(), multiFactor, TotpMultiFactorGenerator, getMultiFactorResolver, signInWithEmailAndPassword };
-      window.dispatchEvent(new Event('mfa-ready'));
-    } catch (e) { console.error('No se pudo iniciar el módulo de 2FA:', e); }
+      const app = initializeApp(window.firebaseConfig);
+      const mAuth = getAuth(app);
+      const mDb = getFirestore(app);
+      const mStorage = getStorage(app);
+
+      // ── Fachada Firestore (forma "compat" sobre primitivas modulares) ──
+      const wrapDocSnap = (s) => ({ exists: s.exists(), id: s.id, data: () => s.data(), ref: wrapDoc(s.ref) });
+      const wrapQuerySnap = (qs) => {
+        const docs = qs.docs.map(d => ({ id: d.id, data: () => d.data(), ref: wrapDoc(d.ref) }));
+        return { empty: qs.empty, size: qs.size, docs, forEach: (cb) => docs.forEach(cb) };
+      };
+      function wrapDoc(dref) {
+        return {
+          __dref: dref, id: dref.id,
+          get: () => getDoc(dref).then(wrapDocSnap),
+          set: (data, opts) => (opts && opts.merge) ? setDoc(dref, data, { merge: true }) : setDoc(dref, data),
+          update: (data) => updateDoc(dref, data),
+          delete: () => deleteDoc(dref),
+          collection: (sub) => wrapCollection(`${dref.path}/${sub}`),
+        };
+      }
+      function wrapQuery(q) {
+        return {
+          where: (f, op, val) => wrapQuery(query(q, where(f, op, val))),
+          orderBy: (f, dir) => wrapQuery(query(q, orderBy(f, dir))),
+          limit: (n) => wrapQuery(query(q, limit(n))),
+          get: () => getDocs(q).then(wrapQuerySnap),
+        };
+      }
+      function wrapCollection(path) {
+        const cref = collection(mDb, path);
+        return {
+          doc: (id) => wrapDoc(id ? doc(cref, id) : doc(cref)),
+          where: (f, op, val) => wrapQuery(query(cref, where(f, op, val))),
+          orderBy: (f, dir) => wrapQuery(query(cref, orderBy(f, dir))),
+          limit: (n) => wrapQuery(query(cref, limit(n))),
+          get: () => getDocs(cref).then(wrapQuerySnap),
+          add: (data) => addDoc(cref, data).then(wrapDoc),
+        };
+      }
+      function wrapBatch() {
+        const b = writeBatch(mDb);
+        const api = {
+          set: (r, data, opts) => { (opts && opts.merge) ? b.set(r.__dref, data, { merge: true }) : b.set(r.__dref, data); return api; },
+          update: (r, data) => { b.update(r.__dref, data); return api; },
+          delete: (r) => { b.delete(r.__dref); return api; },
+          commit: () => b.commit(),
+        };
+        return api;
+      }
+      const db = { collection: wrapCollection, batch: wrapBatch };
+
+      // ── Fachada Storage (forma "compat") ──
+      const storage = {
+        ref: (path) => {
+          const r = storageRef(mStorage, path);
+          return {
+            // uploadBytesResumable devuelve un UploadTask cuyo .on('state_changed', …)
+            // tiene exactamente la misma firma que en compat.
+            put: (file, meta) => uploadBytesResumable(r, file, meta),
+            getDownloadURL: () => getDownloadURL(r),
+            delete: () => deleteObject(r),
+          };
+        },
+      };
+
+      // ── Fachada Auth (forma "compat") ──
+      const auth = {
+        get currentUser() { return mAuth.currentUser; },
+        get languageCode() { return mAuth.languageCode; },
+        set languageCode(v) { mAuth.languageCode = v; },
+        onAuthStateChanged: (cb) => onAuthStateChanged(mAuth, cb),
+        signInWithEmailAndPassword: (email, pass) => signInWithEmailAndPassword(mAuth, email, pass),
+        createUserWithEmailAndPassword: (email, pass) => createUserWithEmailAndPassword(mAuth, email, pass),
+        sendPasswordResetEmail: (email) => sendPasswordResetEmail(mAuth, email),
+        signOut: () => signOut(mAuth),
+      };
+
+      // firebase.firestore.FieldValue (usado por la app para timestamps/increment/delete).
+      const firestoreNs = () => db;
+      firestoreNs.FieldValue = {
+        serverTimestamp: () => serverTimestamp(),
+        increment: (n) => increment(n),
+        delete: () => deleteField(),
+      };
+
+      window.firebase = { initializeApp: () => app, auth: () => auth, firestore: firestoreNs, storage: () => storage };
+      window.auth = auth; window.db = db; window.storage = storage;
+
+      // 2FA/TOTP sobre la MISMA app (ya comparte sesión con Firestore/Storage).
+      window.__mfa = {
+        auth: mAuth, multiFactor, TotpMultiFactorGenerator, getMultiFactorResolver,
+        signInWithEmailAndPassword: (a, email, pass) => signInWithEmailAndPassword(a, email, pass),
+      };
+
+      window.__firebaseReady = true;
+      window.dispatchEvent(new Event('firebase-ready'));
+    } catch (e) {
+      console.error('No se pudo iniciar Firebase (SDK modular):', e);
+      window.__firebaseError = e;
+      window.dispatchEvent(new Event('firebase-error'));
+    }
   </script>
   <style>
     /* ── Brand tokens (extraídos del PPTX de marca) ── */
@@ -966,12 +1073,11 @@ const firebaseConfig = {
   measurementId: "G-Z04M5W003B"
 };
 
-firebase.initializeApp(firebaseConfig);
-const auth    = firebase.auth();
-// Los correos de Firebase Auth (restablecer contraseña, etc.) se envían en español.
-auth.languageCode = 'es';
-const db      = firebase.firestore();
-const storage = firebase.storage();
+// Firebase se inicializa en el <script type="module"> del <head> (SDK modular; el
+// TOTP de 2FA sólo existe en modular). Publicamos la config para ese módulo y
+// declaramos las referencias, que se completan en boot() cuando el módulo avisa.
+window.firebaseConfig = firebaseConfig;
+let auth, db, storage;
 
 let currentUser = null, currentUserData = null;
 let allReports = [], allUsers = [], allFolders = [];
@@ -988,33 +1094,60 @@ let _loginNotice = null;   // aviso a mostrar en la pantalla de login (ej. acces
 const _publicToken = new URLSearchParams(location.search).get('p');
 let _publicMode = !!_publicToken;
 
-/* ── AUTH ── */
-auth.onAuthStateChanged(async (user) => {
-  if (_publicMode) return;   // en modo enlace público no renderizamos login ni app
-  if (user) {
-    const snap = await db.collection('users').doc(user.uid).get();
-    if (!snap.exists) {
-      // Autenticado pero sin registro en el portal: fue borrado por un admin
-      // o nunca se le dio acceso. No recreamos el doc ni lo dejamos entrar.
-      _loginNotice = '⛔ Tu cuenta no tiene acceso al portal. Contactá al administrador.';
+/* ── ARRANQUE ──
+   Firebase lo inicializa el módulo del <head> (SDK modular). Esperamos a que
+   publique auth/db/storage y recién ahí fijamos el idioma, arrancamos el modo
+   enlace público o registramos el listener de sesión. */
+function boot() {
+  auth = window.auth; db = window.db; storage = window.storage;
+  // Los correos de Firebase Auth (restablecer contraseña, etc.) se envían en español.
+  auth.languageCode = 'es';
+  if (_publicMode) { renderPublicView(_publicToken); return; }
+  auth.onAuthStateChanged(async (user) => {
+    if (user) {
+      const snap = await db.collection('users').doc(user.uid).get();
+      if (!snap.exists) {
+        // Autenticado pero sin registro en el portal: fue borrado por un admin
+        // o nunca se le dio acceso. No recreamos el doc ni lo dejamos entrar.
+        _loginNotice = '⛔ Tu cuenta no tiene acceso al portal. Contactá al administrador.';
+        currentUser = null; currentUserData = null;
+        await auth.signOut();   // dispara de nuevo este listener con user=null → renderLogin()
+        return;
+      }
+      currentUser = user;
+      currentUserData = snap.data();
+      // 2FA: si el admin lo exige y el usuario todavía no enroló un segundo factor,
+      // lo obligamos a activarlo antes de entrar al portal. El listado de factores
+      // se consulta con el SDK modular (TOTP no está en compat).
+      const enrolled = mfaEnrolledFactors(user);
+      if (currentUserData.mfaRequired && enrolled.length === 0) { startMfaEnrollment(); return; }
+      enterPortal();
+    } else {
+      stopHeartbeat(); currentSessionId = null;
       currentUser = null; currentUserData = null;
-      await auth.signOut();   // dispara de nuevo este listener con user=null → renderLogin()
-      return;
+      renderLogin();
     }
-    currentUser = user;
-    currentUserData = snap.data();
-    // 2FA: si el admin lo exige y el usuario todavía no enroló un segundo factor,
-    // lo obligamos a activarlo antes de entrar al portal. El listado de factores
-    // se consulta con el SDK modular (TOTP no está en compat).
-    const enrolled = mfaEnrolledFactors(user);
-    if (currentUserData.mfaRequired && enrolled.length === 0) { startMfaEnrollment(); return; }
-    enterPortal();
-  } else {
-    stopHeartbeat(); currentSessionId = null;
-    currentUser = null; currentUserData = null;
-    renderLogin();
-  }
-});
+  });
+}
+
+// Pantalla de error si Firebase no llega a inicializarse.
+function showFirebaseError() {
+  const r = document.getElementById('root');
+  if (r) r.innerHTML = '<div style="max-width:460px;margin:14vh auto;text-align:center;font-family:system-ui,Arial,sans-serif;color:#444">'
+    + '<div style="font-size:2.4rem">⚠️</div><h1 style="font-size:1.15rem;color:#222">No se pudo cargar Firebase</h1>'
+    + '<p style="color:#666;font-size:.9rem;line-height:1.5">Revisá tu conexión a internet y recargá la página.</p>'
+    + '<button onclick="location.reload()" style="margin-top:.8rem;padding:.55rem 1.2rem;border:0;border-radius:8px;background:#E96436;color:#fff;font-weight:600;cursor:pointer">Recargar</button></div>';
+}
+
+// El módulo del <head> (SDK modular) avisa cuando Firebase quedó listo o si falló.
+// El timer cubre el caso en que el import del CDN falla y el módulo ni siquiera
+// corre (no dispararía firebase-error), para no dejar la pantalla en blanco.
+if (window.__firebaseReady) boot();
+else {
+  const _fbTimer = setTimeout(() => { if (!window.__firebaseReady) showFirebaseError(); }, 15000);
+  window.addEventListener('firebase-ready', () => { clearTimeout(_fbTimer); boot(); }, { once: true });
+  window.addEventListener('firebase-error', () => { clearTimeout(_fbTimer); showFirebaseError(); }, { once: true });
+}
 
 // Entra al portal una vez superados el login y (si aplica) el segundo factor.
 function enterPortal() {
@@ -1147,8 +1280,7 @@ async function submitMfaEnrollment() {
   }
 }
 
-// Arranque del modo enlace público (no requiere login).
-if (_publicMode) renderPublicView(_publicToken);
+// El modo enlace público se arranca desde boot() (necesita db ya inicializado).
 
 // Muestra un informe compartido públicamente a partir de su token.
 // Usa overlays fijos apilados sobre la página (no toca el #root ni los
