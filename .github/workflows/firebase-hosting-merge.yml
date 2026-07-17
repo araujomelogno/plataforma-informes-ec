@@ -1,0 +1,21 @@
+# Publica automáticamente a Firebase Hosting (canal "live") en cada push a main.
+# Complementa a firebase-hosting-pull-request.yml (que solo genera previews en PRs).
+name: Deploy to Firebase Hosting on merge
+on:
+  push:
+    branches:
+      - main
+permissions:
+  checks: write
+  contents: read
+jobs:
+  build_and_deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_PORTAL_INFORMES_EC }}
+          channelId: live
+          projectId: portal-informes-ec
