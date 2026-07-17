@@ -1471,6 +1471,7 @@ function renderReportsTable() {
           <td><select class="fselect" style="min-width:150px;font-size:.8rem;padding:.4rem .5rem" onchange="moveReport('${r.id}', this.value)">${folderOptionsHTML(r.folderId || '')}</select></td>
           <td><div class="td-actions">
             <button class="btn btn-outline btn-sm" onclick="previewReport('${r.storagePath}','${esc(r.name)}')">👁 Ver</button>
+            <button class="btn btn-outline btn-sm" onclick="downloadReport('${r.storagePath}','${esc(r.name)}')">⬇ Descargar</button>
             <button class="btn btn-outline btn-sm" onclick="openReportUsersModal('${r.id}','${esc(r.name)}')">👥 Usuarios</button>
             <button class="btn btn-outline btn-sm" onclick="startOverwrite('${r.id}','${r.storagePath}','${esc(r.name)}')">🔄 Reescribir</button>
             <button class="btn btn-outline btn-sm" onclick="managePublicLink('${r.id}','${r.storagePath}','${esc(r.name)}')">${r.publicToken ? '🔗 Link público ✓' : '🔗 Link público'}</button>
@@ -1863,6 +1864,32 @@ async function previewReport(storagePath, name) {
     await openViewer(url, name, { watermark: false, noPrint: false, noDownload: false, noCopy: false }, currentUser && currentUser.email);
   } catch (err) {
     alert('Error al cargar el informe: ' + (err.message || err));
+  } finally {
+    hideLoadingOverlay();
+  }
+}
+
+// Descarga el archivo original con su nombre. La URL de Storage es de otro
+// origen (el atributo download no renombra cross-origin), así que bajamos el
+// contenido como blob y usamos un object URL, que sí respeta el nombre. Requiere
+// el CORS del bucket ya configurado (el mismo que usa el visor).
+async function downloadReport(storagePath, name) {
+  showLoadingOverlay(name);
+  try {
+    const url = await storage.ref(storagePath).getDownloadURL();
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const blob = await resp.blob();
+    const objUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = objUrl;
+    a.download = name || 'informe';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(objUrl), 5000);
+  } catch (err) {
+    alert('Error al descargar el informe: ' + (err.message || err));
   } finally {
     hideLoadingOverlay();
   }
