@@ -857,6 +857,10 @@
                 <label>Contraseña temporal</label>
                 <input type="text" id="new-user-pass" placeholder="mínimo 6 caracteres" />
               </div>
+              <div class="form-group" style="margin:0">
+                <label>Cliente <span style="color:var(--gray);font-weight:500">(opcional)</span></label>
+                <input type="text" id="new-user-cliente" placeholder="Nombre del cliente" />
+              </div>
               <button class="btn btn-orange" onclick="createUser()">＋ Crear</button>
             </div>
             <p style="font-size:0.74rem; color:var(--gray); margin-top:0.9rem; font-weight:500">
@@ -870,8 +874,9 @@
           <div class="card-body">
             <div id="user-import-alert"></div>
             <p style="font-size:0.78rem; color:var(--gray); margin-bottom:0.9rem; font-weight:500">
-              Subí un archivo <strong>.xlsx</strong>, <strong>.xls</strong> o <strong>.csv</strong> con dos columnas:
-              <strong>email</strong> (1ª columna) y <strong>contraseña</strong> (2ª columna, mínimo 6 caracteres).
+              Subí un archivo <strong>.xlsx</strong>, <strong>.xls</strong> o <strong>.csv</strong> con hasta tres columnas:
+              <strong>email</strong> (1ª columna), <strong>contraseña</strong> (2ª columna, mínimo 6 caracteres)
+              y <strong>cliente</strong> (3ª columna, opcional).
               La primera fila puede ser el encabezado (se detecta y omite).
             </p>
             <div class="two-col">
@@ -890,8 +895,11 @@
             <span class="card-header-title">Usuarios registrados</span>
             <span class="count-chip" id="users-count">0</span>
           </div>
-          <div style="padding:.9rem 1.25rem 0">
-            <input type="text" id="users-filter" placeholder="🔎 Filtrar por email…" oninput="renderUsersTable()" style="width:100%;max-width:360px" />
+          <div style="padding:.9rem 1.25rem 0;display:flex;gap:.6rem;flex-wrap:wrap;align-items:center">
+            <input type="text" id="users-filter" placeholder="🔎 Filtrar por email…" oninput="renderUsersTable()" style="flex:1;min-width:220px;max-width:360px" />
+            <select id="users-cliente-filter" class="fselect" style="min-width:200px;max-width:320px" onchange="renderUsersTable()">
+              <option value="">— Todos los clientes —</option>
+            </select>
           </div>
           <div id="users-table"><div class="loading">Cargando usuarios...</div></div>
         </div>
@@ -2261,21 +2269,37 @@ async function loadUsers() {
   } catch { allUsers = []; }
 }
 
+// Repuebla el combobox de filtro por Cliente con los valores existentes,
+// preservando la selección actual.
+function refreshClienteFilter(selected) {
+  const s = el('users-cliente-filter'); if (!s) return;
+  const clientes = [...new Set(allUsers.map(u => String(u.cliente || '').trim()).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }));
+  const sel = selected || '';
+  s.innerHTML = `<option value="">— Todos los clientes —</option>` +
+    clientes.map(c => `<option value="${esc(c)}" ${sel === c ? 'selected' : ''}>${esc(c)}</option>`).join('');
+}
+
 function renderUsersTable() {
   el('users-count').textContent = allUsers.length;
+  const emailF   = (el('users-filter') && el('users-filter').value || '').trim().toLowerCase();
+  const clienteF = (el('users-cliente-filter') && el('users-cliente-filter').value) || '';
+  refreshClienteFilter(clienteF);
+
   if (!allUsers.length) {
     el('users-table').innerHTML = emptyHTML('👤', 'No hay usuarios registrados aún');
     return;
   }
-  const f = (el('users-filter') && el('users-filter').value || '').trim().toLowerCase();
-  const rows = f ? allUsers.filter(u => String(u.email || '').toLowerCase().includes(f)) : allUsers;
+  let rows = allUsers;
+  if (emailF)   rows = rows.filter(u => String(u.email || '').toLowerCase().includes(emailF));
+  if (clienteF) rows = rows.filter(u => String(u.cliente || '').trim() === clienteF);
   if (!rows.length) {
-    el('users-table').innerHTML = emptyHTML('🔎', 'Ningún usuario coincide con la búsqueda.');
+    el('users-table').innerHTML = emptyHTML('🔎', 'Ningún usuario coincide con los filtros.');
     return;
   }
   el('users-table').innerHTML = `
     <table>
-      <thead><tr><th>Email</th><th>Rol</th><th>Creado</th><th>Acciones</th></tr></thead>
+      <thead><tr><th>Email</th><th>Cliente</th><th>Rol</th><th>Creado</th><th>Acciones</th></tr></thead>
       <tbody>
         ${rows.map(u => {
           const isAdmin = u.role === 'admin';
@@ -2287,6 +2311,7 @@ function renderUsersTable() {
             `<button class="btn btn-outline btn-sm" onclick="goToUserPerms('${u.id}')">🔐 Permisos</button>`;
           const paramsBtn = isAdmin ? '' :
             `<button class="btn btn-outline btn-sm" onclick="openUserParamsModal('${u.id}','${esc(u.email)}')">⚙️ Parámetros</button>`;
+          const clienteBtn = `<button class="btn btn-outline btn-sm" onclick="openUserClienteModal('${u.id}','${esc(u.email)}')">✏️ Editar cliente</button>`;
           const mfaLabel = u.mfaRequired ? (u.mfaEnrolled ? '🔒 2FA activa' : '🔒 2FA (pendiente)') : '🔓 2FA: no';
           const mfaBtn = `<button class="btn btn-outline btn-sm" onclick="toggle2FA('${u.id}','${esc(u.email)}',${u.mfaRequired ? 'false' : 'true'})" title="Verificación en dos pasos">${mfaLabel}</button>`;
           const delBtn = isSelf ? '' :
@@ -2294,9 +2319,11 @@ function renderUsersTable() {
           return `
         <tr>
           <td style="font-weight:600">${esc(u.email)}</td>
+          <td>${u.cliente ? esc(u.cliente) : '<span style="color:var(--gray)">—</span>'}</td>
           <td><span class="badge ${isAdmin ? 'badge-admin' : 'badge-user'}">${isAdmin ? 'admin' : 'usuario'}</span></td>
           <td style="color:var(--gray)">${fmtDate(u.createdAt)}</td>
           <td><div class="td-actions">
+            ${clienteBtn}
             ${permBtn}
             ${paramsBtn}
             ${mfaBtn}
@@ -2309,6 +2336,51 @@ function renderUsersTable() {
         }).join('')}
       </tbody>
     </table>`;
+}
+
+// Diálogo para editar el campo "Cliente" de un usuario.
+function openUserClienteModal(uid, email) {
+  const u = allUsers.find(x => x.id === uid) || {};
+  closeClienteModal();
+  const m = document.createElement('div');
+  m.className = 'modal-backdrop'; m.id = 'cliente-modal';
+  m.onclick = (e) => { if (e.target === m) closeClienteModal(); };
+  m.innerHTML = `<div class="modal-box" style="max-width:420px">
+    <div class="modal-head">
+      <span class="modal-title">✏️ Cliente de ${esc(email)}</span>
+      <button class="btn btn-outline btn-sm" onclick="closeClienteModal()">✕ Cerrar</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group" style="margin:0">
+        <label>Cliente</label>
+        <input type="text" id="edit-cliente-input" placeholder="Nombre del cliente" value="${esc(u.cliente || '')}" />
+      </div>
+      <p style="font-size:.75rem;color:var(--gray);font-weight:500;margin:.6rem 0 0">Dejalo vacío para quitar el cliente.</p>
+      <div id="cliente-alert" style="margin-top:.6rem"></div>
+      <div style="margin-top:1rem;border-top:1px solid #eee;padding-top:.85rem;display:flex;justify-content:flex-end;gap:.5rem">
+        <button class="btn btn-orange" onclick="saveUserCliente('${uid}')">💾 Guardar</button>
+      </div>
+    </div>
+  </div>`;
+  document.body.appendChild(m);
+  setTimeout(() => { const i = el('edit-cliente-input'); if (i) { i.focus(); i.addEventListener('keydown', e => { if (e.key === 'Enter') saveUserCliente(uid); }); } }, 60);
+}
+function closeClienteModal() { const m = el('cliente-modal'); if (m) m.remove(); }
+
+async function saveUserCliente(uid) {
+  const val = (v('edit-cliente-input') || '').trim();
+  try {
+    await db.collection('users').doc(uid).update({
+      cliente: val ? val : firebase.firestore.FieldValue.delete()
+    });
+    const u = allUsers.find(x => x.id === uid);
+    if (u) { if (val) u.cliente = val; else delete u.cliente; }
+    closeClienteModal();
+    renderUsersTable();
+  } catch (e) {
+    const a = el('cliente-alert');
+    if (a) a.innerHTML = `<div class="alert alert-error">❌ No se pudo guardar: ${esc(e.message || String(e))}</div>`;
+  }
 }
 
 // Exigir (o no) verificación en dos pasos a un usuario. El enforcement real lo
@@ -2349,7 +2421,7 @@ async function changeRole(uid, email, newRole) {
 // Crea la cuenta de autenticación (sin cerrar la sesión del admin, gracias a
 // returnSecureToken:false) y su documento en Firestore. Reutilizado por la
 // creación individual y por la importación masiva.
-async function provisionUser(email, pass) {
+async function provisionUser(email, pass, cliente) {
   const res = await fetch(
     `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${firebaseConfig.apiKey}`,
     { method:'POST', headers:{'Content-Type':'application/json'},
@@ -2357,23 +2429,27 @@ async function provisionUser(email, pass) {
   );
   const data = await res.json();
   if (data.error) throw new Error(data.error.message);
-  await db.collection('users').doc(data.localId).set({
+  const doc = {
     email, role: 'user',
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
-  });
+  };
+  const c = (cliente || '').trim();
+  if (c) doc.cliente = c;
+  await db.collection('users').doc(data.localId).set(doc);
   return data.localId;
 }
 
 async function createUser() {
-  const email = v('new-user-email'), pass = v('new-user-pass');
+  const email = v('new-user-email'), pass = v('new-user-pass'), cliente = v('new-user-cliente');
   clearAlert('user-create-alert');
   if (!email || !pass)  return showAlert('user-create-alert','error','❌ Completá todos los campos');
   if (pass.length < 6)  return showAlert('user-create-alert','error','❌ La contraseña debe tener al menos 6 caracteres');
   try {
-    await provisionUser(email, pass);
+    await provisionUser(email, pass, cliente);
     showAlert('user-create-alert','success',`✅ Usuario "${email}" creado correctamente`);
     el('new-user-email').value = '';
     el('new-user-pass').value  = '';
+    el('new-user-cliente').value = '';
     await loadUsers(); renderUsersTable(); populatePermSelect();
   } catch (err) {
     const msg = String(err.message || err).includes('EMAIL_EXISTS') ? 'Ya existe un usuario con ese email' : 'Error al crear el usuario';
@@ -2425,11 +2501,12 @@ async function importUsers() {
   const pairs = [];
   (rows || []).forEach(r => {
     if (!r || !r.length) return;
-    const email = String(r[0] ?? '').trim();
-    const pass  = String(r[1] ?? '').trim();
+    const email   = String(r[0] ?? '').trim();
+    const pass    = String(r[1] ?? '').trim();
+    const cliente = String(r[2] ?? '').trim();   // 3ª columna, opcional
     if (!email) return;
     if (/^(e-?mail|correo)/i.test(email)) return;   // fila de encabezado
-    pairs.push({ email, pass });
+    pairs.push({ email, pass, cliente });
   });
 
   if (!pairs.length) {
@@ -2441,12 +2518,12 @@ async function importUsers() {
   const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   const ok = [], exists = [], invalid = [], errored = [];
   for (let i = 0; i < pairs.length; i++) {
-    const { email, pass } = pairs[i];
+    const { email, pass, cliente } = pairs[i];
     prog.innerHTML = `<div class="loading">Procesando ${i + 1} de ${pairs.length}: ${esc(email)}...</div>`;
     if (!emailRe.test(email))     { invalid.push(`${email} — email inválido`); continue; }
     if (pass.length < 6)          { invalid.push(`${email} — contraseña de menos de 6 caracteres`); continue; }
     try {
-      await provisionUser(email, pass);
+      await provisionUser(email, pass, cliente);
       ok.push(email);
     } catch (err) {
       const m = String(err.message || err);
