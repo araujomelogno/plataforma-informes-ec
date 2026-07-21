@@ -1670,6 +1670,32 @@ function refreshFolderSelectors() {
   });
 }
 
+// ¿candidateId es la propia carpeta ancestorId o una de sus descendientes?
+// Sirve para no permitir mover una carpeta dentro de sí misma o de su subárbol.
+function isDescendantFolder(candidateId, ancestorId) {
+  let cur = candidateId ? folderById(candidateId) : null;
+  const guard = new Set();
+  while (cur && !guard.has(cur.id)) {
+    if (cur.id === ancestorId) return true;
+    guard.add(cur.id);
+    cur = cur.parentId ? folderById(cur.parentId) : null;
+  }
+  return false;
+}
+
+// <option>s para "mover carpeta": marca el padre actual como seleccionado y
+// deshabilita los destinos inválidos (la propia carpeta y sus descendientes).
+function folderMoveOptionsHTML(movingId, currentParentId) {
+  const cur = currentParentId || '';
+  let html = `<option value="" ${cur === '' ? 'selected' : ''}>— Raíz —</option>`;
+  foldersInTreeOrder().forEach(({ folder, depth }) => {
+    const pad = '  '.repeat(depth);
+    const invalid = isDescendantFolder(folder.id, movingId);
+    html += `<option value="${folder.id}" ${cur === folder.id ? 'selected' : ''} ${invalid ? 'disabled' : ''}>${pad}📁 ${esc(folder.name)}</option>`;
+  });
+  return html;
+}
+
 function reportCountInFolder(folderId) {
   return allReports.filter(r => (r.folderId || null) === folderId).length;
 }
@@ -1713,6 +1739,8 @@ function renderFoldersTree() {
         <span class="fname">📁 ${esc(folder.name)}</span>
         <span style="color:var(--gray);font-size:.78rem;font-weight:500">· ${meta.join(' · ')}</span>
         <span style="flex:1"></span>
+        <label style="font-size:.75rem;color:var(--gray);font-weight:600">Mover a:</label>
+        <select class="fselect" style="min-width:150px;font-size:.8rem;padding:.35rem .5rem" onchange="moveFolder('${folder.id}', this.value)">${folderMoveOptionsHTML(folder.id, folder.parentId || '')}</select>
         <button class="btn btn-outline btn-sm" onclick="renameFolder('${folder.id}')">✏️ Renombrar</button>
         <button class="btn btn-danger btn-sm" onclick="deleteFolder('${folder.id}')">🗑</button>
       </div>`;
@@ -1734,6 +1762,27 @@ async function createFolder() {
     renderReportsTable();   // refresca los selectores de carpeta por fila
   } catch (e) {
     alert('No se pudo crear la carpeta: ' + (e.message || e));
+  }
+}
+
+// Cambia la carpeta padre de una carpeta (mover en el árbol).
+async function moveFolder(id, newParentId) {
+  const target = newParentId || null;
+  const f = folderById(id); if (!f) return;
+  if ((f.parentId || null) === target) return;   // sin cambios
+  if (target && isDescendantFolder(target, id)) {
+    alert('No se puede mover una carpeta dentro de sí misma ni de una de sus subcarpetas.');
+    renderFoldersTree();   // revierte el selector al valor real
+    return;
+  }
+  try {
+    await db.collection('folders').doc(id).update({ parentId: target });
+    await loadFolders();
+    renderFoldersTree();
+    renderReportsTable();   // refresca navegación/filtros de la lista de informes
+  } catch (e) {
+    alert('No se pudo mover la carpeta: ' + (e.message || e));
+    renderFoldersTree();
   }
 }
 
