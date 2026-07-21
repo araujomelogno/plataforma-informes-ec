@@ -525,6 +525,13 @@
       margin-bottom: 0.35rem; word-break: break-word; letter-spacing: -0.005em;
     }
     .report-card .meta { font-size: 0.74rem; color: var(--gray); font-weight: 600; }
+    /* Informe con acceso caducado: apagado y en rojo, sin efecto hover naranja. */
+    .report-card.expired { background: #FBF3F2; border-color: #E7C3BD; opacity: .9; }
+    .report-card.expired .report-card-icon { filter: grayscale(1); opacity: .55; }
+    .report-card.expired h3 { color: var(--gray); }
+    .report-card.expired:hover { border-color: #C0392B; box-shadow: 0 4px 18px rgba(192,57,43,0.13); }
+    .report-card.expired::before { background: #C0392B; }
+    .report-card .meta.expired-meta { color: #C0392B; font-weight: 800; }
     /* Navegación por carpetas (cliente) y árbol de carpetas (admin) */
     .breadcrumb { display:flex; flex-wrap:wrap; align-items:center; gap:.35rem; margin-bottom:1.15rem; font-size:.85rem; font-weight:600; }
     .breadcrumb a { color:var(--orange); cursor:pointer; text-decoration:none; }
@@ -2627,6 +2634,7 @@ async function loadUserPermissions() {
       ${allReports.map(r => {
         const on = granted.includes(r.id);
         const o  = mergeOpts(optsMap[r.id]);
+        const expVal = (optsMap[r.id] && optsMap[r.id].expiresAt) || '';
         return `
       <div class="perm-item ${on?'granted':''}" id="perm-${r.id}">
         <label class="perm-head">
@@ -2640,6 +2648,13 @@ async function loadUserPermissions() {
                    onchange="toggleOpt('${userId}','${r.id}','${d.key}',this.checked)" />
             <span>${d.icon} ${d.label}</span>
           </label>`).join('')}
+          <label class="perm-opt" style="cursor:default">
+            <span>⏳ Caduca (opcional):</span>
+            <input type="date" data-expiry ${on?'':'disabled'} value="${expVal}"
+                   style="font-size:.72rem;padding:.15rem .3rem;border:1px solid var(--border);border-radius:3px"
+                   onchange="setExpiry('${userId}','${r.id}',this.value)" />
+            ${expVal ? `<button type="button" class="btn btn-outline btn-sm" style="padding:.1rem .4rem;font-size:.68rem" onclick="clearExpiry('${userId}','${r.id}',this)">✕</button>` : ''}
+          </label>
         </div>
       </div>`;
       }).join('')}
@@ -2680,12 +2695,25 @@ async function togglePerm(userId, reportId, cb) {
       i.disabled = !on;
       if (on) i.checked = !!o[i.dataset.optkey];
     });
+    box.querySelectorAll('input[data-expiry]').forEach(i => { i.disabled = !on; });
   }
 }
 
 async function toggleOpt(userId, reportId, key, val) {
   await db.collection('userAccess').doc(userId)
     .set({ options: { [reportId]: { [key]: val } } }, { merge: true });
+}
+
+// Fecha de caducidad del acceso (por usuario + informe). Vacío = sin caducidad.
+async function setExpiry(userId, reportId, value) {
+  await db.collection('userAccess').doc(userId)
+    .set({ options: { [reportId]: { expiresAt: value ? value : firebase.firestore.FieldValue.delete() } } }, { merge: true });
+  loadUserPermissions();   // refresca el botón de limpiar
+}
+function clearExpiry(userId, reportId, btn) {
+  const input = btn.closest('.perm-opt').querySelector('input[data-expiry]');
+  if (input) input.value = '';
+  setExpiry(userId, reportId, '');
 }
 
 /* ── USER VIEW ── */
@@ -2771,17 +2799,26 @@ function renderUserLevel() {
     </div>`;
   }).join('');
 
-  const reportCards = reportsHere.map(r => `
+  const reportCards = reportsHere.map(r => {
+    if (accessExpired(myAccessOptions[r.id])) return `
+    <div class="report-card expired" onclick="showAccessExpired()" title="Acceso caducado">
+      <div class="report-card-icon">${fileIcon(r.name)}</div>
+      <h3>${esc(r.name)}</h3>
+      <div class="meta expired-meta">⛔ Acceso Caducado</div>
+    </div>`;
+    return `
     <div class="report-card" onclick="openUserReport('${r.storagePath}','${esc(r.name)}','${r.id}')">
       <div class="report-card-icon">${fileIcon(r.name)}</div>
       <h3>${esc(r.name)}</h3>
       <div class="meta">${fmtSize(r.size)} · ${fmtDate(r.createdAt)}</div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 
   cont.innerHTML = crumbs + `<div class="report-grid">${folderCards}${reportCards}</div>`;
 }
 
 async function openUserReport(storagePath, name, reportId) {
+  if (accessExpired(myAccessOptions[reportId])) { showAccessExpired(); return; }
   showLoadingOverlay(name);
   try {
     const url = await storage.ref(storagePath).getDownloadURL();
@@ -3608,6 +3645,22 @@ const OPT_DEFS = [
   { key: 'noCopy',     icon: '🖱️', label: 'Bloquear clic derecho / selección' },
 ];
 function mergeOpts(o) { return Object.assign({}, DEFAULT_OPTS, o || {}); }
+
+// ── Caducidad de acceso (por usuario + informe) ──
+// El admin puede fijar una fecha de caducidad, guardada en
+// userAccess/{uid}.options[reportId].expiresAt ('YYYY-MM-DD'). El acceso vale
+// durante todo ese día; a partir del día siguiente (por hora del sistema del
+// cliente) queda caducado y el informe no se muestra.
+function accessExpired(opts) {
+  const exp = opts && opts.expiresAt;
+  if (!exp) return false;
+  const end = new Date(String(exp) + 'T23:59:59.999');   // fin del día indicado, hora local
+  if (isNaN(end.getTime())) return false;
+  return Date.now() > end.getTime();
+}
+function showAccessExpired() {
+  alert('⛔ Acceso Caducado\n\nTu acceso a este informe venció. Si necesitás verlo nuevamente, contactá al administrador.');
+}
 
 /* ── Librerías de render (CDN), cargadas una sola vez y bajo demanda ── */
 const LIB = {
