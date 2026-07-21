@@ -531,8 +531,10 @@
     .breadcrumb a:hover { text-decoration:underline; }
     .breadcrumb .sep { color:var(--gray); }
     .breadcrumb .current { color:var(--dark); }
-    .folder-tree-row { display:flex; align-items:center; gap:.5rem; padding:.45rem .1rem; border-bottom:1px solid #f0f0f0; }
-    .folder-tree-row .fname { font-weight:600; color:var(--dark); }
+    .folder-tree-row { display:flex; align-items:center; gap:.5rem; padding:.5rem .1rem; border-bottom:1px solid #f0f0f0; flex-wrap:wrap; }
+    .folder-tree-row .fname { font-weight:600; color:var(--dark); white-space:nowrap; }
+    .folder-tree-row .ftree-name { display:flex; align-items:center; gap:.4rem; flex:0 0 auto; min-width:300px; }
+    .folder-tree-row .ftree-move { font-size:.75rem; color:var(--gray); font-weight:600; white-space:nowrap; }
     .folder-tree-empty { color:var(--gray); font-size:.85rem; font-weight:500; padding:.5rem 0; }
     /* Selector de usuarios por informe (modal) */
     .user-pick-list { max-height:340px; overflow-y:auto; border:1px solid var(--border); border-radius:4px; }
@@ -1735,12 +1737,14 @@ function renderFoldersTree() {
     meta.push(`${n} ${n === 1 ? 'informe' : 'informes'}`);
     return `
       <div class="folder-tree-row">
-        <span style="width:${depth * 22}px;flex:0 0 auto"></span>
-        <span class="fname">📁 ${esc(folder.name)}</span>
-        <span style="color:var(--gray);font-size:.78rem;font-weight:500">· ${meta.join(' · ')}</span>
+        <div class="ftree-name">
+          <span style="width:${depth * 22}px;flex:0 0 auto"></span>
+          <span class="fname">📁 ${esc(folder.name)}</span>
+          <span style="color:var(--gray);font-size:.78rem;font-weight:500;white-space:nowrap">· ${meta.join(' · ')}</span>
+        </div>
+        <label class="ftree-move">Mover a:</label>
+        <select class="fselect" style="width:230px;flex:0 0 auto;font-size:.8rem;padding:.4rem .5rem" onchange="moveFolder('${folder.id}', this.value)">${folderMoveOptionsHTML(folder.id, folder.parentId || '')}</select>
         <span style="flex:1"></span>
-        <label style="font-size:.75rem;color:var(--gray);font-weight:600">Mover a:</label>
-        <select class="fselect" style="min-width:150px;font-size:.8rem;padding:.35rem .5rem" onchange="moveFolder('${folder.id}', this.value)">${folderMoveOptionsHTML(folder.id, folder.parentId || '')}</select>
         <button class="btn btn-outline btn-sm" onclick="renameFolder('${folder.id}')">✏️ Renombrar</button>
         <button class="btn btn-danger btn-sm" onclick="deleteFolder('${folder.id}')">🗑</button>
       </div>`;
