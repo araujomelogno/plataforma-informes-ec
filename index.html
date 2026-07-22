@@ -17,7 +17,7 @@
   <script type="module">
     import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.0/firebase-app.js';
     import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword,
-             sendPasswordResetEmail, signOut, multiFactor, TotpMultiFactorGenerator, getMultiFactorResolver }
+             sendPasswordResetEmail, sendEmailVerification, signOut, multiFactor, TotpMultiFactorGenerator, getMultiFactorResolver }
       from 'https://www.gstatic.com/firebasejs/10.7.0/firebase-auth.js';
     import { getFirestore, collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, addDoc,
              query, where, orderBy, limit, writeBatch, serverTimestamp, increment, deleteField }
@@ -119,6 +119,7 @@
       window.__mfa = {
         auth: mAuth, multiFactor, TotpMultiFactorGenerator, getMultiFactorResolver,
         signInWithEmailAndPassword: (a, email, pass) => signInWithEmailAndPassword(a, email, pass),
+        sendEmailVerification: (user) => sendEmailVerification(user),
       };
 
       window.__firebaseReady = true;
@@ -1258,6 +1259,11 @@ async function startMfaEnrollment() {
     </div>`);
     return;
   }
+  // Firebase exige el email verificado antes de enrolar un segundo factor. Los
+  // usuarios creados por el admin arrancan sin verificar → los guiamos a verificar.
+  const mUser = window.__mfa.auth.currentUser;
+  if (mUser && mUser.emailVerified === false) { showMfaEmailVerification(mUser); return; }
+
   openMfaModal('<div class="mfa-box"><div class="loading">Generando código…</div></div>');
   try {
     const mfa = window.__mfa.multiFactor(window.__mfa.auth.currentUser);
@@ -1278,8 +1284,43 @@ async function startMfaEnrollment() {
       </div>`);
     await renderQr('mfa-qr', otpUrl);
   } catch (e) {
+    // Si el backend rechaza por email sin verificar, mostramos la guía en vez del error crudo.
+    if (String((e && (e.code || e.message)) || '').toLowerCase().includes('unverified-email')) {
+      showMfaEmailVerification(window.__mfa.auth.currentUser); return;
+    }
     setMfaModalBody(`<div class="mfa-box"><div class="alert alert-error">No se pudo iniciar la activación de 2FA: ${esc(e.message || String(e))}</div>
       <button class="btn btn-outline btn-full" style="margin-top:1rem" onclick="cancelMfa()">Cerrar sesión</button></div>`);
+  }
+}
+
+// El usuario debe verificar su email antes de poder activar el 2FA. Enviamos el
+// correo de verificación (una vez al entrar) y ofrecemos reenviarlo.
+let _mfaVerifSent = false;
+async function showMfaEmailVerification(mUser) {
+  const email = (mUser && mUser.email) || (currentUser && currentUser.email) || '';
+  openMfaModal(`
+    <div class="mfa-box">
+      <div class="accent-bar" style="margin:0 auto .8rem"></div>
+      <h2>Verificá tu email</h2>
+      <p class="mfa-sub">Para activar la verificación en dos pasos, primero tenés que confirmar tu correo <b>${esc(email)}</b>. Te enviamos un enlace de verificación: abrilo y volvé a iniciar sesión.</p>
+      <div id="mfa-alert"></div>
+      <button class="btn btn-orange btn-full" onclick="resendMfaVerification()">📧 Reenviar correo de verificación</button>
+      <button class="btn btn-outline btn-full" style="margin-top:.5rem" onclick="cancelMfa()">Cerrar sesión</button>
+    </div>`);
+  if (!_mfaVerifSent) {
+    _mfaVerifSent = true;
+    try { await window.__mfa.sendEmailVerification(mUser); } catch (e) {}
+  }
+}
+async function resendMfaVerification() {
+  try {
+    await window.__mfa.sendEmailVerification(window.__mfa.auth.currentUser);
+    showAlert('mfa-alert', 'success', '✅ Te reenviamos el correo de verificación. Revisá tu bandeja de entrada (y la carpeta de spam).');
+  } catch (e) {
+    const m = String((e && (e.code || e.message)) || '').toLowerCase();
+    showAlert('mfa-alert', 'error', m.includes('too-many-requests')
+      ? '⚠️ Enviaste varias solicitudes. Esperá unos minutos antes de pedir otro correo.'
+      : '❌ No se pudo enviar el correo: ' + (e.message || e));
   }
 }
 async function submitMfaEnrollment() {
