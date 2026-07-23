@@ -314,6 +314,10 @@
       font-weight: 700;
     }
     .nav-item .nav-icon { font-size: 1rem; width: 20px; text-align: center; opacity: 0.9; }
+    /* Sub-ítems (p. ej. las páginas de Métricas) */
+    .nav-subitem { padding: 0.5rem 1.2rem 0.5rem 2.9rem; font-size: 0.76rem; font-weight: 500; color: rgba(255,255,255,0.5); }
+    .nav-subitem .nav-icon { font-size: 0.5rem; width: 12px; }
+    .nav-item.active-parent { color: var(--white); }
 
     .sidebar-footer {
       margin-top: auto;
@@ -755,8 +759,17 @@
       <button class="nav-item" id="nav-permissions" onclick="switchTab('permissions', this)">
         <span class="nav-icon">🔐</span> Permisos
       </button>
-      <button class="nav-item" id="nav-metrics" onclick="switchTab('metrics', this)">
+      <button class="nav-item" id="nav-metrics" onclick="switchTab('metrics-summary', document.getElementById('nav-metrics-summary'))">
         <span class="nav-icon">📊</span> Métricas
+      </button>
+      <button class="nav-item nav-subitem" id="nav-metrics-summary" onclick="switchTab('metrics-summary', this)">
+        <span class="nav-icon">▪</span> Resumen por usuario
+      </button>
+      <button class="nav-item nav-subitem" id="nav-metrics-sessions" onclick="switchTab('metrics-sessions', this)">
+        <span class="nav-icon">▪</span> Sesiones recientes
+      </button>
+      <button class="nav-item nav-subitem" id="nav-metrics-dashboards" onclick="switchTab('metrics-dashboards', this)">
+        <span class="nav-icon">▪</span> Analítica de dashboards
       </button>
       <button class="nav-item" id="nav-clientdocs" onclick="switchTab('clientdocs', this)">
         <span class="nav-icon">📥</span> Docs de clientes
@@ -931,10 +944,10 @@
         </div>
       </div>
 
-      <div id="tab-metrics" class="hidden">
+      <div id="tab-metrics-summary" class="hidden">
         <div class="page-header">
           <div class="accent-bar"></div>
-          <h2>Métricas de <span class="accent">Acceso</span></h2>
+          <h2>Métricas · <span class="accent">Resumen por usuario</span></h2>
           <p>Quién ingresa, cuántas veces, por cuánto tiempo y desde qué IP</p>
         </div>
         <div class="card">
@@ -957,6 +970,14 @@
           </div>
           <div id="metrics-summary"><div class="loading">Cargando métricas...</div></div>
         </div>
+      </div>
+
+      <div id="tab-metrics-sessions" class="hidden">
+        <div class="page-header">
+          <div class="accent-bar"></div>
+          <h2>Métricas · <span class="accent">Sesiones recientes</span></h2>
+          <p>Detalle de cada acceso: inicio, duración, IP y dispositivo</p>
+        </div>
         <div class="card">
           <div class="card-header">
             <span class="card-header-title">Sesiones recientes</span>
@@ -976,6 +997,14 @@
             </div>
           </div>
           <div id="metrics-sessions"></div>
+        </div>
+      </div>
+
+      <div id="tab-metrics-dashboards" class="hidden">
+        <div class="page-header">
+          <div class="accent-bar"></div>
+          <h2>Métricas · <span class="accent">Analítica de dashboards</span></h2>
+          <p>Uso de los informes HTML por pestaña/sección</p>
         </div>
         <div class="card">
           <div class="card-header">
@@ -1470,12 +1499,15 @@ async function renderUser() {
 
 /* ── TABS ── */
 function switchTab(tab, btn) {
-  ['reports','users','permissions','metrics','clientdocs'].forEach(t =>
+  ['reports','users','permissions','metrics-summary','metrics-sessions','metrics-dashboards','clientdocs'].forEach(t =>
     el('tab-'+t).classList.toggle('hidden', t !== tab));
-  document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
+  document.querySelectorAll('.nav-item').forEach(b => { b.classList.remove('active'); b.classList.remove('active-parent'); });
+  if (btn) btn.classList.add('active');
+  // El padre "Métricas" queda resaltado mientras se ve cualquiera de sus sub-páginas.
+  const nm = el('nav-metrics'); if (nm && tab.indexOf('metrics') === 0) nm.classList.add('active-parent');
   if (tab === 'permissions') populatePermSelect();
-  if (tab === 'metrics') { loadMetrics(); loadDashboardAnalytics(); }
+  if (tab === 'metrics-summary' || tab === 'metrics-sessions') loadMetrics();
+  if (tab === 'metrics-dashboards') loadDashboardAnalytics();
   if (tab === 'clientdocs') loadClientDocs();
 }
 
