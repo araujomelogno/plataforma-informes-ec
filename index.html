@@ -537,6 +537,24 @@
     .report-card.expired:hover { border-color: #C0392B; box-shadow: 0 4px 18px rgba(192,57,43,0.13); }
     .report-card.expired::before { background: #C0392B; }
     .report-card .meta.expired-meta { color: #C0392B; font-weight: 800; }
+    /* Matriz usuarios/informes */
+    .matrix-wrap { overflow: auto; max-height: 72vh; margin-top: .5rem; }
+    table.matrix { border-collapse: separate; border-spacing: 0; font-size: .8rem; }
+    table.matrix th, table.matrix td { border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+    table.matrix thead th { background: var(--gray-xlight); }
+    table.matrix th.mx-corner { position: sticky; left: 0; top: 0; z-index: 4; background: var(--gray-light); text-align: left; padding: .4rem .6rem; white-space: nowrap; border-left: 1px solid var(--border); border-top: 1px solid var(--border); }
+    table.matrix th.mx-user { position: sticky; top: 0; z-index: 3; height: 150px; padding: .25rem; vertical-align: bottom; border-top: 1px solid var(--border); }
+    table.matrix th.mx-user > span { display: inline-block; writing-mode: vertical-rl; transform: rotate(180deg); font-weight: 600; color: var(--dark); max-height: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    table.matrix th.mx-total-col { position: sticky; top: 0; z-index: 3; padding: .3rem .55rem; border-top: 1px solid var(--border); }
+    table.matrix td.mx-name { position: sticky; left: 0; z-index: 2; background: var(--white); text-align: left; padding: .35rem .6rem; font-weight: 600; white-space: nowrap; border-left: 1px solid var(--border); }
+    table.matrix tbody tr:hover td { background: #FAFAFA; }
+    table.matrix tbody tr:hover td.mx-name { background: var(--orange-light); }
+    table.matrix td.mx-cell { text-align: center; width: 2rem; min-width: 2rem; }
+    table.matrix .mx-yes { color: #1E9E57; font-weight: 800; }
+    table.matrix .mx-no { color: #D9D9D9; }
+    table.matrix td.mx-total, table.matrix th.mx-total-col { text-align: center; font-weight: 700; color: var(--gray); background: var(--gray-xlight); }
+    table.matrix tfoot td { position: sticky; bottom: 0; z-index: 2; background: var(--gray-xlight); font-weight: 700; text-align: center; }
+    table.matrix tfoot td.mx-name { left: 0; z-index: 3; text-align: left; color: var(--dark); }
     /* Navegación por carpetas (cliente) y árbol de carpetas (admin) */
     .breadcrumb { display:flex; flex-wrap:wrap; align-items:center; gap:.35rem; margin-bottom:1.15rem; font-size:.85rem; font-weight:600; }
     .breadcrumb a { color:var(--orange); cursor:pointer; text-decoration:none; }
@@ -758,6 +776,9 @@
       </button>
       <button class="nav-item" id="nav-permissions" onclick="switchTab('permissions', this)">
         <span class="nav-icon">🔐</span> Permisos
+      </button>
+      <button class="nav-item" id="nav-matrix" onclick="switchTab('matrix', this)">
+        <span class="nav-icon">▦</span> Matriz usuarios/informes
       </button>
       <button class="nav-item" id="nav-metrics" onclick="switchTab('metrics-summary', document.getElementById('nav-metrics-summary'))">
         <span class="nav-icon">📊</span> Métricas
@@ -1038,6 +1059,25 @@
             <input type="text" id="clientdocs-filter" placeholder="🔎 Filtrar por nombre o email…" oninput="renderClientDocsTable()" style="width:100%;max-width:380px" />
           </div>
           <div id="clientdocs-table"><div class="loading">Cargando documentos...</div></div>
+        </div>
+      </div>
+
+      <div id="tab-matrix" class="hidden">
+        <div class="page-header">
+          <div class="accent-bar"></div>
+          <h2>Matriz <span class="accent">usuarios / informes</span></h2>
+          <p>Qué usuarios acceden a qué informes según los permisos asignados</p>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <span class="card-header-title">Matriz de acceso</span>
+            <button class="btn btn-outline btn-sm" onclick="loadMatrix()">↻ Actualizar</button>
+          </div>
+          <div style="padding:.9rem 1.25rem 0;display:flex;gap:.6rem;flex-wrap:wrap;align-items:center">
+            <input type="text" id="matrix-filter-report" placeholder="🔎 Informe…" oninput="renderMatrix()" style="flex:1;min-width:180px;max-width:280px" />
+            <input type="text" id="matrix-filter-user" placeholder="🔎 Usuario (email)…" oninput="renderMatrix()" style="flex:1;min-width:180px;max-width:280px" />
+          </div>
+          <div id="matrix-content"><div class="loading">Cargando matriz...</div></div>
         </div>
       </div>
 
@@ -1507,13 +1547,14 @@ async function renderUser() {
 
 /* ── TABS ── */
 function switchTab(tab, btn) {
-  ['reports','users','permissions','metrics-summary','metrics-sessions','metrics-dashboards','clientdocs'].forEach(t =>
+  ['reports','users','permissions','matrix','metrics-summary','metrics-sessions','metrics-dashboards','clientdocs'].forEach(t =>
     el('tab-'+t).classList.toggle('hidden', t !== tab));
   document.querySelectorAll('.nav-item').forEach(b => { b.classList.remove('active'); b.classList.remove('active-parent'); });
   if (btn) btn.classList.add('active');
   // El padre "Métricas" queda resaltado mientras se ve cualquiera de sus sub-páginas.
   const nm = el('nav-metrics'); if (nm && tab.indexOf('metrics') === 0) nm.classList.add('active-parent');
   if (tab === 'permissions') populatePermSelect();
+  if (tab === 'matrix') loadMatrix();
   if (tab === 'metrics-summary' || tab === 'metrics-sessions') loadMetrics();
   if (tab === 'metrics-dashboards') loadDashboardAnalytics();
   if (tab === 'clientdocs') loadClientDocs();
@@ -1543,6 +1584,76 @@ async function loadReportAccessCounts() {
     });
   } catch { /* sin permisos / sin datos → contadores vacíos */ }
   reportAccessCounts = counts;
+}
+
+/* ── MATRIZ usuarios/informes ── */
+let _matrixAccess = null;   // { uid: Set(reportIds) }
+async function loadMatrix() {
+  const cont = el('matrix-content'); if (!cont) return;
+  cont.innerHTML = '<div class="loading">Cargando matriz...</div>';
+  try {
+    if (!allUsers.length)   await loadUsers();
+    if (!allReports.length) await loadReports();
+    const snap = await db.collection('userAccess').get();
+    const access = {};
+    snap.docs.forEach(d => { access[d.id] = new Set(d.data().reportIds || []); });
+    _matrixAccess = access;
+    renderMatrix();
+  } catch (e) {
+    cont.innerHTML = emptyHTML('⚠️', 'No se pudo cargar la matriz: ' + esc(e.message || String(e)));
+  }
+}
+
+function renderMatrix() {
+  const cont = el('matrix-content'); if (!cont || !_matrixAccess) return;
+  const rf = (el('matrix-filter-report') && el('matrix-filter-report').value || '').trim().toLowerCase();
+  const uf = (el('matrix-filter-user') && el('matrix-filter-user').value || '').trim().toLowerCase();
+  const access = _matrixAccess;
+
+  const allNonAdmin = allUsers.filter(u => u.role !== 'admin');
+  let users = allNonAdmin
+    .map(u => ({ uid: u.id, email: u.email || '' }))
+    .filter(u => !uf || u.email.toLowerCase().includes(uf))
+    .sort((a, b) => a.email.localeCompare(b.email, 'es', { sensitivity: 'base' }));
+  let reports = allReports
+    .map(r => ({ id: r.id, name: r.name || '' }))
+    .filter(r => !rf || r.name.toLowerCase().includes(rf))
+    .sort((a, b) => a.name.localeCompare(b.name, 'es', { sensitivity: 'base' }));
+
+  if (!allNonAdmin.length) { cont.innerHTML = emptyHTML('👤', 'No hay usuarios (no-admin) para mostrar.'); return; }
+  if (!allReports.length)  { cont.innerHTML = emptyHTML('📭', 'No hay informes para mostrar.'); return; }
+  if (!users.length || !reports.length) { cont.innerHTML = emptyHTML('🔎', 'Nada coincide con los filtros.'); return; }
+
+  const has = (uid, rid) => !!(access[uid] && access[uid].has(rid));
+
+  const head = `<tr>
+    <th class="mx-corner">Informe \\ Usuario</th>
+    ${users.map(u => `<th class="mx-user" title="${esc(u.email)}"><span>${esc(u.email)}</span></th>`).join('')}
+    <th class="mx-total-col" title="Usuarios con acceso a este informe">Total</th>
+  </tr>`;
+
+  const body = reports.map(r => {
+    const cnt = users.reduce((n, u) => n + (has(u.uid, r.id) ? 1 : 0), 0);
+    return `<tr>
+      <td class="mx-name">${fileIcon(r.name)} ${esc(r.name)}</td>
+      ${users.map(u => has(u.uid, r.id)
+        ? `<td class="mx-cell mx-yes" title="${esc(u.email)} tiene acceso a ${esc(r.name)}">✓</td>`
+        : `<td class="mx-cell mx-no">·</td>`).join('')}
+      <td class="mx-total">${cnt}</td>
+    </tr>`;
+  }).join('');
+
+  const foot = `<tr>
+    <td class="mx-name">Informes por usuario</td>
+    ${users.map(u => `<td class="mx-total">${reports.reduce((n, r) => n + (has(u.uid, r.id) ? 1 : 0), 0)}</td>`).join('')}
+    <td class="mx-total"></td>
+  </tr>`;
+
+  cont.innerHTML = `<div class="matrix-wrap"><table class="matrix">
+    <thead>${head}</thead>
+    <tbody>${body}</tbody>
+    <tfoot>${foot}</tfoot>
+  </table></div>`;
 }
 
 function renderReportsTable() {
