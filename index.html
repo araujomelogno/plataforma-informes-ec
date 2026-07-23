@@ -2276,7 +2276,11 @@ function reportUsersShellHTML() {
 function renderReportUsersList() {
   const st = _reportUsersModal; if (!st) return;
   const f = (el('report-users-filter') && el('report-users-filter').value || '').trim().toLowerCase();
-  const list = st.users.filter(u => !f || u.email.toLowerCase().includes(f));
+  // Primero los que tienen acceso (checkbox marcado), luego por email. El orden se
+  // calcula al abrir/filtrar y se mantiene estable mientras se tildan casillas.
+  const list = st.users
+    .filter(u => !f || u.email.toLowerCase().includes(f))
+    .sort((a, b) => (b.has - a.has) || a.email.localeCompare(b.email, 'es', { sensitivity: 'base' }));
   const box = el('report-users-listbox');
   if (box) {
     box.innerHTML = list.length ? list.map(u => `
