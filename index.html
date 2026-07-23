@@ -3361,6 +3361,7 @@ async function startSession() {
 const HEARTBEAT_MS   = 60000;                // frecuencia del latido (1 min)
 const IDLE_LIMIT_MS  = 5 * 60 * 1000;        // inactividad tras la cual se pausa el conteo
 const MAX_SESSION_MS = 2 * 60 * 60 * 1000;   // tope de duración por sesión (saneo de métricas)
+const SESSION_LIVE_MS = 2.5 * 60 * 1000;     // sin latido en este lapso ⇒ ya no cuenta como "en curso"
 
 function markActivity() { _lastActivity = Date.now(); }
 function bindActivity() {
@@ -3398,10 +3399,14 @@ async function endSession() {
     });
   } catch (e) {}
 }
-// Al ocultar/cerrar la pestaña registramos el último "visto" (best-effort).
+// Al ocultar la pestaña registramos el último "visto" (best-effort). No cerramos
+// la sesión acá porque cambiar de pestaña no es cerrar sesión.
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') touchSession();
 });
+// Al cerrar la pestaña o navegar fuera, cerramos la sesión (best-effort; si la
+// escritura no llega a completarse, el umbral de latido igual la marca cerrada).
+window.addEventListener('pagehide', () => { if (currentSessionId) endSession(); });
 
 let _allSessions = [];   // sesiones cargadas para el panel de métricas
 
@@ -3498,7 +3503,7 @@ function renderSessionsTable() {
     <tbody>${list.slice(0, 300).map(s => `<tr>
       <td style="font-weight:600">${esc(s.email || s.uid)}</td>
       <td style="color:var(--gray)">${fmtDateTime(tsMs(s.startAt))}</td>
-      <td>${s.ended ? fmtDur(sessionDuration(s)) : '<span style="color:var(--orange);font-weight:600">en curso</span>'}</td>
+      <td>${sessionOpen(s) ? '<span style="color:var(--orange);font-weight:600">en curso</span>' : fmtDur(sessionDuration(s))}</td>
       <td style="color:var(--gray)">${esc(s.ip || '—')}</td>
       <td style="color:var(--gray);font-size:.72rem">${esc(shortUA(s.userAgent))}</td>
     </tr>`).join('')}</tbody></table></div>`;
@@ -3534,7 +3539,7 @@ async function showUserAccess(uid, email) {
         return `<tr>
           <td>${d ? d.toLocaleDateString('es-UY', {day:'2-digit',month:'2-digit',year:'numeric'}) : '—'}</td>
           <td>${d ? d.toLocaleTimeString('es-UY', {hour:'2-digit',minute:'2-digit'}) : '—'}</td>
-          <td>${s.ended ? fmtDur(sessionDuration(s)) : '<span style="color:var(--orange);font-weight:600">en curso</span>'}</td>
+          <td>${sessionOpen(s) ? '<span style="color:var(--orange);font-weight:600">en curso</span>' : fmtDur(sessionDuration(s))}</td>
           <td style="color:var(--gray)">${esc(s.ip || '—')}</td>
         </tr>`;
       }).join('')}</tbody></table></div>`);
@@ -3556,6 +3561,14 @@ function openAccessModal(email, bodyHtml) {
 function setAccessModalBody(html) { const b = el('access-modal-body'); if (b) b.innerHTML = html; }
 function closeAccessModal() { const m = el('access-modal'); if (m) m.remove(); }
 function tsMs(ts) { return ts && ts.toDate ? ts.toDate().getTime() : (ts ? new Date(ts).getTime() : 0); }
+// "En curso" solo si el latido es reciente. Las sesiones abandonadas (pestaña
+// cerrada o recargada) dejan de latir y, pasado el umbral, muestran su duración
+// real en vez de quedar "en curso" para siempre.
+function sessionOpen(s) {
+  if (s.ended) return false;
+  const last = tsMs(s.lastSeenAt) || tsMs(s.startAt);
+  return last > 0 && (Date.now() - last) < SESSION_LIVE_MS;
+}
 function sessionDuration(s) {
   const a = tsMs(s.startAt), b = tsMs(s.endAt) || tsMs(s.lastSeenAt);
   let d = (a && b && b > a) ? (b - a) : 0;
