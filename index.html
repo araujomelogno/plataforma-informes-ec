@@ -958,12 +958,16 @@
           <div class="card-body" style="padding-bottom:0.5rem">
             <div class="metrics-filter">
               <div class="form-group" style="margin:0">
+                <label>Usuario</label>
+                <input type="text" id="metrics-sum-user" placeholder="🔎 email…" oninput="_sumPage=0;renderUserSummary()" />
+              </div>
+              <div class="form-group" style="margin:0">
                 <label>Desde</label>
-                <input type="date" id="metrics-sum-from" onchange="renderUserSummary()" />
+                <input type="date" id="metrics-sum-from" onchange="_sumPage=0;renderUserSummary()" />
               </div>
               <div class="form-group" style="margin:0">
                 <label>Hasta</label>
-                <input type="date" id="metrics-sum-to" onchange="renderUserSummary()" />
+                <input type="date" id="metrics-sum-to" onchange="_sumPage=0;renderUserSummary()" />
               </div>
               <button class="btn btn-outline btn-sm" onclick="clearSummaryFilter()">Limpiar</button>
             </div>
@@ -986,12 +990,16 @@
           <div class="card-body" style="padding-bottom:0.5rem">
             <div class="metrics-filter">
               <div class="form-group" style="margin:0">
+                <label>Usuario</label>
+                <input type="text" id="metrics-ses-user" placeholder="🔎 email…" oninput="_sesPage=0;renderSessionsTable()" />
+              </div>
+              <div class="form-group" style="margin:0">
                 <label>Desde</label>
-                <input type="date" id="metrics-from" onchange="renderSessionsTable()" />
+                <input type="date" id="metrics-from" onchange="_sesPage=0;renderSessionsTable()" />
               </div>
               <div class="form-group" style="margin:0">
                 <label>Hasta</label>
-                <input type="date" id="metrics-to" onchange="renderSessionsTable()" />
+                <input type="date" id="metrics-to" onchange="_sesPage=0;renderSessionsTable()" />
               </div>
               <button class="btn btn-outline btn-sm" onclick="clearMetricsFilter()">Limpiar</button>
             </div>
@@ -3467,6 +3475,20 @@ async function loadMetrics() {
 // Renderiza el "Resumen por usuario" aplicando su propio filtro Desde/Hasta.
 // La columna "IPs" lista TODAS las IPs distintas usadas en el rango (más
 // reciente primero), en lugar de solo la última.
+// ── Paginado de las tablas de métricas ──
+const METRICS_PAGE = 20;
+let _sumPage = 0, _sesPage = 0;
+function pagerHTML(page, totalPages, totalItems, fn) {
+  if (totalPages <= 1) return '';
+  return `<div style="display:flex;align-items:center;justify-content:flex-end;gap:.6rem;padding:.7rem 1.25rem;font-size:.8rem;color:var(--gray);flex-wrap:wrap">
+    <span>${totalItems} resultado${totalItems === 1 ? '' : 's'} · página ${page + 1} de ${totalPages}</span>
+    <button class="btn btn-outline btn-sm" ${page <= 0 ? 'disabled' : ''} onclick="${fn}(-1)">‹ Anterior</button>
+    <button class="btn btn-outline btn-sm" ${page >= totalPages - 1 ? 'disabled' : ''} onclick="${fn}(1)">Siguiente ›</button>
+  </div>`;
+}
+function gotoSumPage(delta) { _sumPage += delta; renderUserSummary(); }
+function gotoSesPage(delta) { _sesPage += delta; renderSessionsTable(); }
+
 function renderUserSummary() {
   const sumEl = el('metrics-summary');
   if (!sumEl) return;
@@ -3475,12 +3497,11 @@ function renderUserSummary() {
   const toV   = el('metrics-sum-to')   && el('metrics-sum-to').value;
   const from = fromV ? new Date(fromV + 'T00:00:00').getTime() : null;
   const to   = toV   ? new Date(toV   + 'T23:59:59').getTime() : null;
+  const userF = (el('metrics-sum-user') && el('metrics-sum-user').value || '').trim().toLowerCase();
 
   let list = _allSessions;
   if (from) list = list.filter(s => tsMs(s.startAt) >= from);
   if (to)   list = list.filter(s => tsMs(s.startAt) <= to);
-
-  if (!list.length) { sumEl.innerHTML = emptyHTML('🔎', 'No hay accesos en ese rango de fechas.'); return; }
 
   const byUser = {};
   list.forEach(s => {
@@ -3494,10 +3515,18 @@ function renderUserSummary() {
     if (ip && (!byUser[k].ips[ip] || st > byUser[k].ips[ip])) byUser[k].ips[ip] = st;
   });
 
-  const rows = Object.values(byUser).sort((a, b) => b.last - a.last);
+  let rows = Object.values(byUser).sort((a, b) => b.last - a.last);
+  if (userF) rows = rows.filter(u => String(u.email || '').toLowerCase().includes(userF));
+  if (!rows.length) { sumEl.innerHTML = emptyHTML('🔎', 'No hay accesos que coincidan con los filtros.'); return; }
+
+  const totalPages = Math.max(1, Math.ceil(rows.length / METRICS_PAGE));
+  if (_sumPage >= totalPages) _sumPage = totalPages - 1;
+  if (_sumPage < 0) _sumPage = 0;
+  const pageRows = rows.slice(_sumPage * METRICS_PAGE, (_sumPage + 1) * METRICS_PAGE);
+
   sumEl.innerHTML = `<div style="overflow-x:auto"><table>
     <thead><tr><th>Usuario</th><th>Accesos</th><th>Tiempo total</th><th>Último acceso</th><th>IPs</th></tr></thead>
-    <tbody>${rows.map(u => {
+    <tbody>${pageRows.map(u => {
       const ips = Object.keys(u.ips).sort((a, b) => u.ips[b] - u.ips[a]);
       const ipsHtml = ips.length ? ips.map(esc).join('<br>') : '—';
       return `<tr>
@@ -3507,16 +3536,18 @@ function renderUserSummary() {
         <td style="color:var(--gray)">${u.last ? fmtDateTime(u.last) : '—'}</td>
         <td style="color:var(--gray)">${ipsHtml}</td>
       </tr>`;
-    }).join('')}</tbody></table></div>`;
+    }).join('')}</tbody></table></div>` + pagerHTML(_sumPage, totalPages, rows.length, 'gotoSumPage');
 }
 
 function clearSummaryFilter() {
   if (el('metrics-sum-from')) el('metrics-sum-from').value = '';
   if (el('metrics-sum-to'))   el('metrics-sum-to').value = '';
+  if (el('metrics-sum-user')) el('metrics-sum-user').value = '';
+  _sumPage = 0;
   renderUserSummary();
 }
 
-// Renderiza la tabla de sesiones recientes aplicando el filtro Desde/Hasta.
+// Renderiza la tabla de sesiones recientes con filtros (fecha + usuario) y paginado de 20.
 function renderSessionsTable() {
   const sesEl = el('metrics-sessions');
   if (!sesEl) return;
@@ -3524,25 +3555,35 @@ function renderSessionsTable() {
   const toV   = el('metrics-to') && el('metrics-to').value;
   const from = fromV ? new Date(fromV + 'T00:00:00').getTime() : null;
   const to   = toV   ? new Date(toV   + 'T23:59:59').getTime() : null;
+  const userF = (el('metrics-ses-user') && el('metrics-ses-user').value || '').trim().toLowerCase();
 
   let list = _allSessions;
   if (from) list = list.filter(s => tsMs(s.startAt) >= from);
   if (to)   list = list.filter(s => tsMs(s.startAt) <= to);
+  if (userF) list = list.filter(s => String(s.email || s.uid || '').toLowerCase().includes(userF));
 
-  if (!list.length) { sesEl.innerHTML = emptyHTML('🔎', 'No hay sesiones en ese rango de fechas.'); return; }
+  if (!list.length) { sesEl.innerHTML = emptyHTML('🔎', 'No hay sesiones que coincidan con los filtros.'); return; }
+
+  const totalPages = Math.max(1, Math.ceil(list.length / METRICS_PAGE));
+  if (_sesPage >= totalPages) _sesPage = totalPages - 1;
+  if (_sesPage < 0) _sesPage = 0;
+  const pageRows = list.slice(_sesPage * METRICS_PAGE, (_sesPage + 1) * METRICS_PAGE);
+
   sesEl.innerHTML = `<div style="overflow-x:auto"><table>
     <thead><tr><th>Usuario</th><th>Inicio</th><th>Duración</th><th>IP</th><th>Dispositivo</th></tr></thead>
-    <tbody>${list.slice(0, 300).map(s => `<tr>
+    <tbody>${pageRows.map(s => `<tr>
       <td style="font-weight:600">${esc(s.email || s.uid)}</td>
       <td style="color:var(--gray)">${fmtDateTime(tsMs(s.startAt))}</td>
       <td>${sessionOpen(s) ? '<span style="color:var(--orange);font-weight:600">en curso</span>' : fmtDur(sessionDuration(s))}</td>
       <td style="color:var(--gray)">${esc(s.ip || '—')}</td>
       <td style="color:var(--gray);font-size:.72rem">${esc(shortUA(s.userAgent))}</td>
-    </tr>`).join('')}</tbody></table></div>`;
+    </tr>`).join('')}</tbody></table></div>` + pagerHTML(_sesPage, totalPages, list.length, 'gotoSesPage');
 }
 function clearMetricsFilter() {
   if (el('metrics-from')) el('metrics-from').value = '';
   if (el('metrics-to'))   el('metrics-to').value = '';
+  if (el('metrics-ses-user')) el('metrics-ses-user').value = '';
+  _sesPage = 0;
   renderSessionsTable();
 }
 
@@ -3636,22 +3677,41 @@ function shortUA(ua) {
 }
 
 /* ── Analítica de dashboards (uso por pestaña dentro de los informes HTML) ── */
+let _dashEvents = [];
 async function loadDashboardAnalytics() {
   const cont = el('metrics-dashboards');
   if (!cont) return;
   cont.innerHTML = '<div class="loading">Cargando analítica...</div>';
-  let events = [];
   try {
     const snap = await db.collection('dashboardEvents').orderBy('at', 'desc').limit(3000).get();
-    events = snap.docs.map(d => d.data());
+    _dashEvents = snap.docs.map(d => d.data());
   } catch (e) {
     cont.innerHTML = emptyHTML('⚠️', 'No se pudo cargar la analítica.<br>¿Publicaste las reglas de Firestore para <b>dashboardEvents</b>?');
     return;
   }
+  renderDashboardAnalytics();
+}
+
+function renderDashboardAnalytics() {
+  const cont = el('metrics-dashboards');
+  if (!cont) return;
+  const events = _dashEvents;
   if (!events.length) {
     cont.innerHTML = emptyHTML('📈', 'Todavía no hay datos de uso.<br>Agregá el snippet de analítica a los dashboards (ver README).');
     return;
   }
+  // Combobox de filtro por informe (preserva la selección actual).
+  const sel = (el('metrics-dash-report') && el('metrics-dash-report').value) || '';
+  const reportNames = [...new Set(events.map(ev => ev.reportName || ev.reportId || '—'))]
+    .sort((a, b) => String(a).localeCompare(String(b), 'es', { sensitivity: 'base' }));
+  const comboHtml = `<div style="padding:.9rem 1.25rem;display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;border-bottom:1px solid var(--border)">
+    <label style="font-size:.75rem;color:var(--gray);font-weight:600">Informe:</label>
+    <select id="metrics-dash-report" class="fselect" style="min-width:220px;max-width:360px" onchange="renderDashboardAnalytics()">
+      <option value="">— Todos los informes —</option>
+      ${reportNames.map(n => `<option value="${esc(n)}" ${sel === n ? 'selected' : ''}>${esc(n)}</option>`).join('')}
+    </select>
+  </div>`;
+
   // Agrupar por informe → sección
   const byReport = {};
   events.forEach(ev => {
@@ -3664,8 +3724,11 @@ async function loadDashboardAnalytics() {
       byReport[r].activity++;
     }
   });
-  const reports = Object.keys(byReport).sort((a, b) => byReport[b].activity - byReport[a].activity);
-  cont.innerHTML = reports.map(r => {
+  let reports = Object.keys(byReport).sort((a, b) => byReport[b].activity - byReport[a].activity);
+  if (sel) reports = reports.filter(r => r === sel);
+  if (!reports.length) { cont.innerHTML = comboHtml + emptyHTML('🔎', 'No hay datos para ese informe.'); return; }
+
+  cont.innerHTML = comboHtml + reports.map(r => {
     const d = byReport[r];
     const secs = Object.keys(d.sections).sort((a, b) => d.sections[b].visits - d.sections[a].visits);
     const rowsHtml = secs.length ? secs.map(s => {
