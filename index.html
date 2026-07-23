@@ -3713,21 +3713,29 @@ function renderDashboardAnalytics() {
   }
   const reportNames = [...new Set(events.map(ev => ev.reportName || ev.reportId || '—'))]
     .sort((a, b) => String(a).localeCompare(String(b), 'es', { sensitivity: 'base' }));
-  // Combobox de filtro por informe (preserva la selección actual). Si venimos
-  // desde el botón "Estadísticas" de un informe, lo preseleccionamos si existe.
-  let sel = (el('metrics-dash-report') && el('metrics-dash-report').value) || '';
-  if (_pendingDashReport) {
-    const cand = [_pendingDashReport.name, _pendingDashReport.id].filter(Boolean);
-    sel = reportNames.find(n => cand.includes(n)) || '';
-    _pendingDashReport = null;
-  }
-  const comboHtml = `<div style="padding:.9rem 1.25rem;display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;border-bottom:1px solid var(--border)">
+  // Combobox de filtro por informe (función para reusar con distintas selecciones).
+  const combo = (selVal) => `<div style="padding:.9rem 1.25rem;display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;border-bottom:1px solid var(--border)">
     <label style="font-size:.75rem;color:var(--gray);font-weight:600">Informe:</label>
     <select id="metrics-dash-report" class="fselect" style="min-width:220px;max-width:360px" onchange="renderDashboardAnalytics()">
-      <option value="">— Todos los informes —</option>
-      ${reportNames.map(n => `<option value="${esc(n)}" ${sel === n ? 'selected' : ''}>${esc(n)}</option>`).join('')}
+      <option value="" ${selVal === '' ? 'selected' : ''}>— Todos los informes —</option>
+      ${reportNames.map(n => `<option value="${esc(n)}" ${selVal === n ? 'selected' : ''}>${esc(n)}</option>`).join('')}
     </select>
   </div>`;
+
+  let sel = (el('metrics-dash-report') && el('metrics-dash-report').value) || '';
+  // Si venimos del botón "Estadísticas" de un informe, lo preseleccionamos. Si ese
+  // informe no tiene datos de uso, mostramos el mensaje "Sin datos analíticos".
+  if (_pendingDashReport) {
+    const cand = [_pendingDashReport.name, _pendingDashReport.id].filter(Boolean);
+    const match = reportNames.find(n => cand.includes(n));
+    const nm = _pendingDashReport.name || _pendingDashReport.id || '';
+    _pendingDashReport = null;
+    if (!match) {
+      cont.innerHTML = combo('') + emptyHTML('📈', `Sin datos analíticos para «${esc(nm)}».<br>Este informe todavía no registró uso.`);
+      return;
+    }
+    sel = match;
+  }
 
   // Agrupar por informe → sección
   const byReport = {};
@@ -3743,9 +3751,9 @@ function renderDashboardAnalytics() {
   });
   let reports = Object.keys(byReport).sort((a, b) => byReport[b].activity - byReport[a].activity);
   if (sel) reports = reports.filter(r => r === sel);
-  if (!reports.length) { cont.innerHTML = comboHtml + emptyHTML('🔎', 'No hay datos para ese informe.'); return; }
+  if (!reports.length) { cont.innerHTML = combo(sel) + emptyHTML('🔎', 'No hay datos para ese informe.'); return; }
 
-  cont.innerHTML = comboHtml + reports.map(r => {
+  cont.innerHTML = combo(sel) + reports.map(r => {
     const d = byReport[r];
     const secs = Object.keys(d.sections).sort((a, b) => d.sections[b].visits - d.sections[a].visits);
     const rowsHtml = secs.length ? secs.map(s => {
