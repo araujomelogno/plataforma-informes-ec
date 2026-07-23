@@ -2243,11 +2243,11 @@ async function openReportUsersModal(reportId, name) {
   try {
     // Acceso actual: leemos todos los userAccess una vez y armamos el mapa.
     const snap = await db.collection('userAccess').get();
-    const accessByUid = {};
-    snap.docs.forEach(d => { accessByUid[d.id] = (d.data().reportIds || []); });
+    const accessByUid = {}, optionsByUid = {};
+    snap.docs.forEach(d => { const dt = d.data(); accessByUid[d.id] = (dt.reportIds || []); optionsByUid[d.id] = (dt.options || {}); });
     const users = allUsers
       .filter(u => u.role !== 'admin')
-      .map(u => ({ uid: u.id, email: u.email || '', has: (accessByUid[u.id] || []).includes(reportId) }))
+      .map(u => ({ uid: u.id, email: u.email || '', has: (accessByUid[u.id] || []).includes(reportId), opts: (optionsByUid[u.id] || {})[reportId] || {} }))
       .sort((a, b) => a.email.localeCompare(b.email, 'es'));
     _reportUsersModal = { reportId, name, users };
     setUsersModalBody(reportUsersShellHTML());
@@ -2284,11 +2284,14 @@ function renderReportUsersList() {
   const box = el('report-users-listbox');
   if (box) {
     box.innerHTML = list.length ? list.map(u => `
-      <label class="user-pick">
-        <input type="checkbox" ${u.has ? 'checked' : ''} onchange="toggleReportUser('${u.uid}', this.checked, this)" />
-        <span class="user-pick-avatar">${esc((u.email[0] || '?').toUpperCase())}</span>
-        <span class="user-pick-email">${esc(u.email)}</span>
-      </label>`).join('') : `<div class="folder-tree-empty" style="padding:.7rem">No hay usuarios que coincidan.</div>`;
+      <div class="user-pick-row" id="urow-${u.uid}">
+        <label class="user-pick">
+          <input type="checkbox" ${u.has ? 'checked' : ''} onchange="toggleReportUser('${u.uid}', this.checked, this)" />
+          <span class="user-pick-avatar">${esc((u.email[0] || '?').toUpperCase())}</span>
+          <span class="user-pick-email">${esc(u.email)}</span>
+        </label>
+        <div class="user-pick-opts ${u.has ? '' : 'hidden'}" id="uopts-${u.uid}">${u.has ? reportUserOptsHTML(u.uid, st.reportId, u.opts) : ''}</div>
+      </div>`).join('') : `<div class="folder-tree-empty" style="padding:.7rem">No hay usuarios que coincidan.</div>`;
   }
   const cnt = el('report-users-count');
   if (cnt) {
@@ -2301,8 +2304,16 @@ async function toggleReportUser(uid, grant, cb) {
   const st = _reportUsersModal; if (!st) return;
   if (cb) cb.disabled = true;
   try {
-    await grantReportToUser(uid, st.reportId, grant);
-    const u = st.users.find(x => x.uid === uid); if (u) u.has = grant;
+    const options = await grantReportToUser(uid, st.reportId, grant);
+    const u = st.users.find(x => x.uid === uid);
+    if (u) { u.has = grant; if (grant) u.opts = options[st.reportId] || {}; }
+    // Mostrar/ocultar las opciones de permisos de ese usuario en el momento
+    // (sin reordenar la lista, para no perder el punto donde estás).
+    const box = el('uopts-' + uid);
+    if (box) {
+      if (grant) { box.innerHTML = reportUserOptsHTML(uid, st.reportId, (u && u.opts) || {}); box.classList.remove('hidden'); }
+      else { box.innerHTML = ''; box.classList.add('hidden'); }
+    }
     const cnt = el('report-users-count');
     if (cnt) {
       const granted = st.users.filter(x => x.has).length;
@@ -2318,6 +2329,51 @@ async function toggleReportUser(uid, grant, cb) {
     if (cb) cb.disabled = false;
   }
 }
+
+// Bloque de opciones de un usuario en el modal de acceso por informe: las mismas
+// protecciones y caducidad que en la pestaña Permisos, editables inline.
+function reportUserOptsHTML(uid, reportId, opts) {
+  const o = mergeOpts(opts);
+  const expVal = (opts && opts.expiresAt) || '';
+  return `<div style="display:grid;gap:.3rem;padding:.15rem 0 .55rem 2.5rem;border-bottom:1px dashed var(--border);margin-bottom:.15rem">
+    ${OPT_DEFS.map(d => `
+    <label class="perm-opt">
+      <input type="checkbox" ${o[d.key] ? 'checked' : ''} onchange="toggleReportUserOpt('${uid}','${reportId}','${d.key}',this.checked)" />
+      <span>${d.icon} ${d.label}</span>
+    </label>`).join('')}
+    <label class="perm-opt" style="flex-direction:column;align-items:stretch;gap:.3rem;cursor:default">
+      <span>⏳ Caduca (opcional):</span>
+      <div style="display:flex;align-items:center;gap:.35rem;min-width:0">
+        <input type="date" value="${expVal}" style="flex:1;min-width:0;box-sizing:border-box;font-size:.72rem;padding:.25rem .3rem;border:1px solid var(--border);border-radius:3px"
+               onchange="setReportUserExpiry('${uid}','${reportId}',this.value)" />
+        ${expVal ? `<button type="button" class="btn btn-outline btn-sm" style="flex:0 0 auto;padding:.15rem .45rem;font-size:.68rem" onclick="clearReportUserExpiry('${uid}','${reportId}')">✕</button>` : ''}
+      </div>
+    </label>
+  </div>`;
+}
+
+async function toggleReportUserOpt(uid, reportId, key, val) {
+  try {
+    await toggleOpt(uid, reportId, key, val);   // persiste en userAccess/{uid}.options[reportId]
+    const st = _reportUsersModal; const u = st && st.users.find(x => x.uid === uid);
+    if (u) { u.opts = u.opts || {}; u.opts[key] = val; }
+  } catch (e) {
+    alert('No se pudo guardar la opción: ' + (e.message || e));
+  }
+}
+
+async function setReportUserExpiry(uid, reportId, value) {
+  try {
+    await writeExpiry(uid, reportId, value);
+    const st = _reportUsersModal; const u = st && st.users.find(x => x.uid === uid);
+    if (u) { u.opts = u.opts || {}; if (value) u.opts.expiresAt = value; else delete u.opts.expiresAt; }
+    const box = el('uopts-' + uid);   // refrescar solo ese bloque (para mostrar/ocultar el ✕)
+    if (box) box.innerHTML = reportUserOptsHTML(uid, reportId, (u && u.opts) || {});
+  } catch (e) {
+    alert('No se pudo guardar la caducidad: ' + (e.message || e));
+  }
+}
+function clearReportUserExpiry(uid, reportId) { setReportUserExpiry(uid, reportId, ''); }
 
 /* ── Parámetros por usuario (se envían a los informes HTML) ── */
 // Se guardan en el propio doc users/{uid} (campo 'params'), que el cliente ya
@@ -2792,11 +2848,16 @@ async function toggleOpt(userId, reportId, key, val) {
     .set({ options: { [reportId]: { [key]: val } } }, { merge: true });
 }
 
-// Fecha de caducidad del acceso (por usuario + informe). Vacío = sin caducidad.
-async function setExpiry(userId, reportId, value) {
+// Escribe (o borra) la fecha de caducidad del acceso por usuario + informe.
+// Compartida por la pestaña Permisos y el modal de usuarios por informe.
+async function writeExpiry(userId, reportId, value) {
   await db.collection('userAccess').doc(userId)
     .set({ options: { [reportId]: { expiresAt: value ? value : firebase.firestore.FieldValue.delete() } } }, { merge: true });
-  loadUserPermissions();   // refresca el botón de limpiar
+}
+// Caducidad desde la pestaña Permisos (refresca esa vista para el botón de limpiar).
+async function setExpiry(userId, reportId, value) {
+  await writeExpiry(userId, reportId, value);
+  loadUserPermissions();
 }
 function clearExpiry(userId, reportId, btn) {
   const input = btn.closest('.perm-opt').querySelector('input[data-expiry]');
