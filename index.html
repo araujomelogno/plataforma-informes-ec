@@ -1597,6 +1597,7 @@ function renderReportsTable() {
           <td><div class="td-actions">
             <button class="btn btn-outline btn-sm" onclick="previewReport('${r.storagePath}','${esc(r.name)}')">👁 Ver</button>
             <button class="btn btn-outline btn-sm" onclick="downloadReport('${r.storagePath}','${esc(r.name)}')">⬇ Descargar</button>
+            <button class="btn btn-outline btn-sm" onclick="goToReportStats('${r.id}','${esc(r.name)}')">📈 Estadísticas</button>
             <button class="btn btn-outline btn-sm" onclick="openReportUsersModal('${r.id}','${esc(r.name)}')">👥 Usuarios</button>
             <button class="btn btn-outline btn-sm" onclick="startOverwrite('${r.id}','${r.storagePath}','${esc(r.name)}')">🔄 Reescribir</button>
             <button class="btn btn-outline btn-sm" onclick="managePublicLink('${r.id}','${r.storagePath}','${esc(r.name)}')">${r.publicToken ? '🔗 Link público ✓' : '🔗 Link público'}</button>
@@ -3678,6 +3679,15 @@ function shortUA(ua) {
 
 /* ── Analítica de dashboards (uso por pestaña dentro de los informes HTML) ── */
 let _dashEvents = [];
+let _pendingDashReport = null;   // informe a preseleccionar al entrar a la analítica
+
+// Desde la lista de informes: ir a la analítica de dashboards con este informe
+// preseleccionado en el combobox (si tiene datos de uso).
+function goToReportStats(reportId, reportName) {
+  _pendingDashReport = { id: reportId, name: reportName };
+  switchTab('metrics-dashboards', document.getElementById('nav-metrics-dashboards'));
+}
+
 async function loadDashboardAnalytics() {
   const cont = el('metrics-dashboards');
   if (!cont) return;
@@ -3697,13 +3707,20 @@ function renderDashboardAnalytics() {
   if (!cont) return;
   const events = _dashEvents;
   if (!events.length) {
+    _pendingDashReport = null;
     cont.innerHTML = emptyHTML('📈', 'Todavía no hay datos de uso.<br>Agregá el snippet de analítica a los dashboards (ver README).');
     return;
   }
-  // Combobox de filtro por informe (preserva la selección actual).
-  const sel = (el('metrics-dash-report') && el('metrics-dash-report').value) || '';
   const reportNames = [...new Set(events.map(ev => ev.reportName || ev.reportId || '—'))]
     .sort((a, b) => String(a).localeCompare(String(b), 'es', { sensitivity: 'base' }));
+  // Combobox de filtro por informe (preserva la selección actual). Si venimos
+  // desde el botón "Estadísticas" de un informe, lo preseleccionamos si existe.
+  let sel = (el('metrics-dash-report') && el('metrics-dash-report').value) || '';
+  if (_pendingDashReport) {
+    const cand = [_pendingDashReport.name, _pendingDashReport.id].filter(Boolean);
+    sel = reportNames.find(n => cand.includes(n)) || '';
+    _pendingDashReport = null;
+  }
   const comboHtml = `<div style="padding:.9rem 1.25rem;display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;border-bottom:1px solid var(--border)">
     <label style="font-size:.75rem;color:var(--gray);font-weight:600">Informe:</label>
     <select id="metrics-dash-report" class="fselect" style="min-width:220px;max-width:360px" onchange="renderDashboardAnalytics()">
