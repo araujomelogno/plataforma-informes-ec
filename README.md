@@ -165,8 +165,9 @@ Sí, siempre que sean recursos inline o URLs absolutas externas. Recursos relati
 
 ## 📄 Formatos soportados y visor
 
-El administrador puede subir **HTML, PDF, Word (.doc/.docx), PowerPoint (.ppt/.pptx) y video (.mp4/.webm/.mov/.m4v/.ogg)**.
-El cliente los ve **inline** (dentro del portal), renderizados en su propio navegador:
+El administrador (y el cliente, en su propia sección) puede subir **cualquier tipo de archivo**.
+Los formatos con **visor integrado** se ven **inline** (dentro del portal), renderizados en el
+navegador del cliente; **cualquier otro formato se ofrece para descarga**.
 
 | Formato | Cómo se muestra |
 |---------|-----------------|
@@ -176,8 +177,14 @@ El cliente los ve **inline** (dentro del portal), renderizados en su propio nave
 | HTML | En un `<iframe>` con sandbox |
 | **Video** (`.mp4`, `.webm`, `.mov`, …) | Reproductor `<video>` nativo, inline. Aplican las protecciones (marca de agua, bloqueo de descarga/clic derecho) |
 | `.doc` / `.ppt` (formatos viejos) | No se pueden previsualizar → se ofrece descarga. Convertí a `.docx`/`.pptx` o PDF |
+| **Cualquier otro** (`.xlsx`, `.csv`, `.zip`, `.txt`, imágenes, audio, etc.) | No tienen visor → el portal muestra una pantalla con el nombre del archivo y un botón **⬇ Descargar** (con el nombre original) |
 
 Las librerías de render se cargan desde CDN bajo demanda (solo cuando se abre un documento de ese tipo). El video no usa librerías ni CORS.
+
+> ℹ️ La descarga de los archivos sin visor usa el mismo mecanismo (fetch + blob) que el botón
+> **⬇ Descargar** de la tabla de informes, por lo que **requiere el CORS del bucket configurado**
+> (ver más abajo). Si el fetch falla por CORS, el portal abre la URL del archivo directamente
+> como último recurso. El bloqueo de descarga por usuario/informe también aplica a estos archivos.
 
 > ⚠️ **Video y plan gratuito (Spark):** los videos son pesados y el plan gratuito tiene topes ajustados — **1 GB/día de descarga** y **5 GB de almacenamiento** total. Con videos se llega rápido a esos límites; para uso intensivo conviene el plan **Blaze** (pago por uso). El formato más compatible es **MP4 (H.264)**.
 
