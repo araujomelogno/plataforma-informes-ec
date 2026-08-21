@@ -830,11 +830,11 @@
               ondragleave="handleDragLeave(event)">
               <div class="upload-icon">📁</div>
               <p><strong>Hacé clic para subir</strong> o arrastrá archivos aquí</p>
-              <p class="hint">HTML, PDF, Word, PowerPoint y video (.mp4/.webm/.mov) · Podés subir varios a la vez</p>
+              <p class="hint">Cualquier tipo de archivo · HTML, PDF, Word, PowerPoint y video se ven en el portal; el resto se descarga · Podés subir varios a la vez</p>
             </div>
-            <input type="file" id="file-input" accept=".html,.htm,.pdf,.doc,.docx,.ppt,.pptx,.mp4,.webm,.ogg,.ogv,.mov,.m4v" multiple class="hidden" onchange="handleFileSelect(event)" />
+            <input type="file" id="file-input" multiple class="hidden" onchange="handleFileSelect(event)" />
             <!-- Input oculto para reescribir (sobrescribir) el contenido de un informe ya cargado -->
-            <input type="file" id="overwrite-input" accept=".html,.htm,.pdf,.doc,.docx,.ppt,.pptx,.mp4,.webm,.ogg,.ogv,.mov,.m4v" class="hidden" onchange="handleOverwriteSelect(event)" />
+            <input type="file" id="overwrite-input" class="hidden" onchange="handleOverwriteSelect(event)" />
             <div id="upload-progress" class="hidden progress-wrap">
               <div class="progress-meta">
                 <span id="upload-status">Subiendo...</span>
@@ -1130,9 +1130,9 @@
             ondragleave="handleClientDragLeave(event)">
             <div class="upload-icon">📤</div>
             <p><strong>Hacé clic para subir</strong> o arrastrá archivos aquí</p>
-            <p class="hint">HTML, PDF, Word, PowerPoint y video (.mp4/.webm/.mov) · Podés subir varios a la vez</p>
+            <p class="hint">Cualquier tipo de archivo · HTML, PDF, Word, PowerPoint y video se ven en el portal; el resto se descarga · Podés subir varios a la vez</p>
           </div>
-          <input type="file" id="client-file-input" accept=".html,.htm,.pdf,.doc,.docx,.ppt,.pptx,.mp4,.webm,.ogg,.ogv,.mov,.m4v" multiple class="hidden" onchange="handleClientFileSelect(event)" />
+          <input type="file" id="client-file-input" multiple class="hidden" onchange="handleClientFileSelect(event)" />
           <div id="client-upload-progress" class="hidden progress-wrap">
             <div class="progress-meta">
               <span id="client-upload-status">Subiendo...</span>
@@ -1729,7 +1729,7 @@ function handleDragOver(e) { e.preventDefault(); el('upload-area').classList.add
 function handleDragLeave()  { el('upload-area').classList.remove('drag'); }
 function handleDrop(e) {
   e.preventDefault(); el('upload-area').classList.remove('drag');
-  const files = [...e.dataTransfer.files].filter(f => isAllowed(f.name));
+  const files = [...e.dataTransfer.files];
   if (files.length) uploadFiles(files);
 }
 function handleFileSelect(e) {
@@ -1738,11 +1738,8 @@ function handleFileSelect(e) {
 }
 
 async function uploadFiles(files) {
-  const rejected = files.filter(f => !isAllowed(f.name));
-  files = files.filter(f => isAllowed(f.name));
-  if (rejected.length)
-    alert('Se ignoraron archivos con formato no soportado:\n' + rejected.map(f => f.name).join('\n') +
-          '\n\nFormatos permitidos: HTML, PDF, DOC, DOCX, PPT, PPTX.');
+  // Se acepta cualquier tipo de archivo. Los formatos con visor (HTML, PDF,
+  // Word, PowerPoint, video) se muestran inline; el resto se ofrece para descarga.
   if (!files.length) return;
 
   // Carpeta destino elegida en el selector (null = raíz).
@@ -2068,9 +2065,6 @@ function handleOverwriteSelect(e) {
 }
 
 async function overwriteReport(target, file) {
-  if (!isAllowed(file.name)) {
-    return alert('Formato no soportado.\n\nFormatos permitidos: HTML, PDF, DOC, DOCX, PPT, PPTX y video.');
-  }
   // Debe ser del mismo tipo que el informe original: el visor decide cómo
   // renderizar según la extensión del nombre, que no cambia al reescribir.
   // Para cambiar de formato, hay que borrar el informe y subir uno nuevo.
@@ -2180,25 +2174,36 @@ async function previewReport(storagePath, name) {
   }
 }
 
-// Descarga el archivo original con su nombre. La URL de Storage es de otro
-// origen (el atributo download no renombra cross-origin), así que bajamos el
-// contenido como blob y usamos un object URL, que sí respeta el nombre. Requiere
-// el CORS del bucket ya configurado (el mismo que usa el visor).
-async function downloadReport(storagePath, name) {
-  showLoadingOverlay(name);
+// Descarga el contenido de una URL con el nombre indicado. La URL de Storage es
+// de otro origen (el atributo download no renombra cross-origin), así que bajamos
+// el contenido como blob y usamos un object URL, que sí respeta el nombre. Requiere
+// el CORS del bucket ya configurado (el mismo que usa el visor). Si falla el fetch
+// (p.ej. CORS), abre la URL directamente como último recurso.
+async function downloadBlobUrl(url, name) {
   try {
-    const url = await storage.ref(storagePath).getDownloadURL();
     const resp = await fetch(url);
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
     const blob = await resp.blob();
     const objUrl = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = objUrl;
-    a.download = name || 'informe';
+    a.download = name || 'archivo';
     document.body.appendChild(a);
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(objUrl), 5000);
+  } catch (err) {
+    // Sin CORS no se puede leer el blob: abrimos la URL (el navegador la descarga
+    // si el content-type es octet-stream, o la muestra en una pestaña nueva).
+    window.open(url, '_blank', 'noopener');
+  }
+}
+// Descarga un informe/documento por su ruta de Storage, con su nombre original.
+async function downloadReport(storagePath, name) {
+  showLoadingOverlay(name);
+  try {
+    const url = await storage.ref(storagePath).getDownloadURL();
+    await downloadBlobUrl(url, name);
   } catch (err) {
     alert('Error al descargar el informe: ' + (err.message || err));
   } finally {
@@ -3101,7 +3106,7 @@ function handleClientDragOver(e) { e.preventDefault(); el('client-upload-area').
 function handleClientDragLeave() { el('client-upload-area').classList.remove('drag'); }
 function handleClientDrop(e) {
   e.preventDefault(); el('client-upload-area').classList.remove('drag');
-  const files = [...e.dataTransfer.files].filter(f => isAllowed(f.name));
+  const files = [...e.dataTransfer.files];
   if (files.length) uploadClientFiles(files);
 }
 function handleClientFileSelect(e) {
@@ -3110,11 +3115,7 @@ function handleClientFileSelect(e) {
 }
 
 async function uploadClientFiles(files) {
-  const rejected = files.filter(f => !isAllowed(f.name));
-  files = files.filter(f => isAllowed(f.name));
-  if (rejected.length)
-    alert('Se ignoraron archivos con formato no soportado:\n' + rejected.map(f => f.name).join('\n') +
-          '\n\nFormatos permitidos: HTML, PDF, DOC, DOCX, PPT, PPTX y video.');
+  // Se acepta cualquier tipo de archivo (los no previsualizables se descargan).
   if (!files.length) return;
 
   el('client-upload-progress').classList.remove('hidden');
@@ -3354,6 +3355,11 @@ async function openViewer(url, name, opts, viewerEmail, reportId) {
       await renderDocx(url, content);
     } else if (ext === 'pptx') {
       await renderPptx(url, content);
+    } else if (kind === 'download') {
+      // Formato sin visor: se ofrece la descarga (respetando "bloquear descarga").
+      content.innerHTML = downloadOnlyView(name, opts);
+      const btn = content.querySelector('#viewer-dl-btn');
+      if (btn) btn.onclick = () => downloadBlobUrl(url, name);
     } else {
       content.innerHTML = legacyFallback(name, url, opts);  // .doc / .ppt antiguos
     }
@@ -3523,6 +3529,23 @@ function legacyFallback(name, url, opts) {
     <p style="font-size:.8rem;color:var(--gray);max-width:460px;margin:0 auto 1rem">
       Los archivos <b>.doc</b> y <b>.ppt</b> no se pueden previsualizar en el navegador.
       Convertilos a .docx / .pptx (o a PDF) para verlos inline.</p>
+    ${dl}
+  </div>`;
+}
+// Vista para archivos sin visor integrado (cualquier formato distinto de
+// HTML/PDF/Word/PowerPoint/video): se ofrece la descarga con el nombre original.
+// El botón se cablea en openViewer (evita problemas de comillas en la URL).
+function downloadOnlyView(name, opts) {
+  const dl = opts.noDownload
+    ? '<p style="font-size:.8rem;color:var(--gray)">La descarga está deshabilitada para este archivo.</p>'
+    : `<button id="viewer-dl-btn" class="btn btn-orange">⬇ Descargar ${esc(name)}</button>`;
+  const e = extOf(name);
+  return `<div class="empty" style="padding:3rem">
+    <div class="empty-icon">${fileIcon(name)}</div>
+    <p><strong>Este archivo no se puede previsualizar en el portal</strong></p>
+    <p style="font-size:.8rem;color:var(--gray);max-width:460px;margin:0 auto 1rem">
+      ${e ? `El formato <b>.${esc(e)}</b> no tiene visor integrado.` : 'Este formato no tiene visor integrado.'}
+      Descargalo para abrirlo en tu dispositivo.</p>
     ${dl}
   </div>`;
 }
@@ -3957,24 +3980,39 @@ const on  = (id, ev, fn) => el(id)?.addEventListener(ev, fn);
 const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
 /* ── ARCHIVOS: tipos soportados ── */
+// Se admite subir CUALQUIER tipo de archivo. Los formatos con visor integrado
+// (HTML, PDF, Word, PowerPoint, video) se muestran inline dentro del portal; el
+// resto se ofrece para descarga.
 const VIDEO_EXT = ['mp4','webm','ogg','ogv','mov','m4v'];
-const ALLOWED_EXT = ['html','htm','pdf','doc','docx','ppt','pptx'].concat(VIDEO_EXT);
+// Extensiones con visor inline (informativo; ya no se usa para bloquear subidas).
+const VIEWABLE_EXT = ['html','htm','pdf','doc','docx','ppt','pptx'].concat(VIDEO_EXT);
 function extOf(name)   { const m = String(name).toLowerCase().match(/\.([a-z0-9]+)$/); return m ? m[1] : ''; }
-function isAllowed(name){ return ALLOWED_EXT.includes(extOf(name)); }
+function isViewable(name){ return VIEWABLE_EXT.includes(extOf(name)); }
 function fileKind(name) {
   const e = extOf(name);
   if (e === 'pdf') return 'pdf';
   if (VIDEO_EXT.includes(e)) return 'video';
   if (['doc','docx','ppt','pptx'].includes(e)) return 'office';
-  return 'html'; // .html/.htm y desconocidos: se muestran como HTML (compatibilidad con informes previos)
+  if (e === 'html' || e === 'htm' || e === '') return 'html'; // HTML e informes previos sin extensión
+  return 'download'; // cualquier otro formato: se ofrece descarga (no hay visor)
 }
+const ARCHIVE_EXT = ['zip','rar','7z','tar','gz','tgz','bz2'];
+const IMAGE_EXT   = ['png','jpg','jpeg','gif','webp','svg','bmp','tif','tiff','heic','avif'];
+const SHEET_EXT   = ['xls','xlsx','xlsm','csv','tsv','ods'];
+const AUDIO_EXT   = ['mp3','wav','m4a','aac','flac','oga'];
 function fileIcon(name) {
   const e = extOf(name);
-  if (e === 'pdf')                return '📕';
+  if (e === 'pdf')                 return '📕';
   if (e === 'doc' || e === 'docx') return '📘';
   if (e === 'ppt' || e === 'pptx') return '📙';
   if (VIDEO_EXT.includes(e))       return '🎬';
-  return '🌐'; // HTML
+  if (e === 'html' || e === 'htm' || e === '') return '🌐';
+  if (SHEET_EXT.includes(e))       return '📗';
+  if (ARCHIVE_EXT.includes(e))     return '🗜️';
+  if (IMAGE_EXT.includes(e))       return '🖼️';
+  if (AUDIO_EXT.includes(e))       return '🎵';
+  if (e === 'txt' || e === 'rtf' || e === 'md') return '📄';
+  return '📎'; // otros formatos (descargables)
 }
 function guessContentType(name) {
   return ({
