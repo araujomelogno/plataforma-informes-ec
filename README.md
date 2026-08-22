@@ -209,18 +209,36 @@ En **Panel Admin → Informes → Carpetas** se pueden crear carpetas (anidadas)
 para organizar los informes:
 
 - **Crear carpeta** eligiendo opcionalmente una carpeta "padre" (soporta
-  carpetas dentro de carpetas).
+  carpetas dentro de carpetas) y si es **visible para clientes** (marcada por
+  defecto).
 - **Mover un informe** a una carpeta con el selector de la columna *Carpeta* de
   la tabla, o elegir la carpeta destino al subir.
-- **Renombrar** y **borrar** carpetas. Al borrar una carpeta con contenido, sus
-  subcarpetas e informes se **mueven a la carpeta padre** (no se borra ningún
-  informe).
+- **Renombrar**, **mostrar/ocultar** (botón 👁 Visible / 🙈 Oculta) y **borrar**
+  carpetas. Al borrar una carpeta con contenido, sus subcarpetas e informes se
+  **mueven a la carpeta padre** (no se borra ningún informe).
 
 Del lado del **cliente**, la vista "Mis Informes" se navega como un árbol: se
 ven las carpetas y los informes, y al entrar a una carpeta se ve su contenido
 (con "migas de pan" para volver). El acceso sigue siendo **por informe**: el
 cliente solo ve una carpeta si dentro (a cualquier nivel) tiene algún informe
 asignado a él.
+
+### 👁 Carpetas ocultas para clientes
+
+Cada carpeta tiene un interruptor **"Visible para clientes"**:
+
+- **Visible** (por defecto): el cliente ve la carpeta y navega dentro de ella
+  normalmente.
+- **Oculta** (`clientVisible = false`): el cliente **no ve la carpeta en sí**,
+  pero **sí ve su contenido** (subcarpetas e informes) **un nivel más arriba**,
+  como si la carpeta no existiera. Es **recursivo**: si hay varias carpetas
+  ocultas anidadas, el contenido se "promueve" hasta la carpeta **visible más
+  cercana** hacia arriba (o hasta la raíz). Esto solo afecta la vista del
+  cliente; el administrador siempre ve todas las carpetas (las ocultas aparecen
+  atenuadas y con la etiqueta *"oculta a clientes"*).
+
+> Solo cambia **dónde aparecen** los informes en el árbol del cliente; no cambia
+> **a qué** informes tiene acceso (eso se sigue controlando en **Permisos**).
 
 > Requiere **publicar las reglas de Firestore** actualizadas (incluyen la
 > colección `folders`): pegá el contenido de `firestore.rules` en Firebase
