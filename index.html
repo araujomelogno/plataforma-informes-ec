@@ -860,6 +860,12 @@
                 <label>Dentro de</label>
                 <select id="new-folder-parent" class="fselect"><option value="">— Raíz —</option></select>
               </div>
+              <div class="form-group" style="margin:0;flex:0 0 auto;align-self:center">
+                <label style="display:flex;align-items:center;gap:.4rem;cursor:pointer;white-space:nowrap;font-weight:600" title="Si se desmarca, los clientes no verán la carpeta: verán su contenido (subcarpetas e informes) un nivel más arriba.">
+                  <input type="checkbox" id="new-folder-visible" checked style="width:auto;margin:0" />
+                  👁 Visible para clientes
+                </label>
+              </div>
               <button class="btn btn-orange" onclick="createFolder()">➕ Crear carpeta</button>
             </div>
             <div id="folders-tree"><div class="loading">Cargando carpetas...</div></div>
@@ -1836,6 +1842,25 @@ async function loadFolders() {
 
 function folderById(id) { return allFolders.find(f => f.id === id) || null; }
 
+// ¿La carpeta es visible para los clientes? Por defecto sí (clientVisible ausente
+// o distinto de false). Si es false, el cliente no ve la carpeta en sí: ve su
+// contenido "promovido" a la carpeta visible más cercana hacia arriba (o a la raíz).
+function isClientVisibleFolder(f) { return !f || f.clientVisible !== false; }
+
+// Dada una carpeta (por id) devuelve la carpeta visible más cercana en la cadena
+// [ella misma, su padre, su abuelo, …]. Si ninguna es visible, devuelve null (raíz).
+// Se usa en la vista del cliente para "saltear" las carpetas ocultas.
+function nearestVisibleFolderFrom(folderId) {
+  let cur = folderId ? folderById(folderId) : null;
+  const seen = new Set();
+  while (cur && !seen.has(cur.id)) {
+    seen.add(cur.id);
+    if (isClientVisibleFolder(cur)) return cur.id;
+    cur = cur.parentId ? folderById(cur.parentId) : null;
+  }
+  return null; // raíz
+}
+
 function childFolders(parentId) {
   return allFolders
     .filter(f => (f.parentId || null) === (parentId || null))
@@ -1932,32 +1957,56 @@ function renderFoldersTree() {
     const meta = [];
     if (subs) meta.push(`${subs} ${subs === 1 ? 'subcarpeta' : 'subcarpetas'}`);
     meta.push(`${n} ${n === 1 ? 'informe' : 'informes'}`);
+    const visible = isClientVisibleFolder(folder);
+    const visBtn = visible
+      ? `<button class="btn btn-outline btn-sm" title="Los clientes ven esta carpeta. Clic para ocultarla (verían su contenido un nivel arriba)." onclick="toggleFolderVisible('${folder.id}')">👁 Visible</button>`
+      : `<button class="btn btn-outline btn-sm" style="opacity:.7" title="Oculta para clientes: no ven la carpeta, sino su contenido un nivel arriba. Clic para hacerla visible." onclick="toggleFolderVisible('${folder.id}')">🙈 Oculta</button>`;
+    const hiddenTag = visible ? '' :
+      `<span style="color:var(--gray);font-size:.72rem;font-weight:600;white-space:nowrap;background:var(--gray-xlight);border-radius:6px;padding:.1rem .4rem">oculta a clientes</span>`;
     return `
       <div class="folder-tree-row">
         <div class="ftree-name">
           <span style="width:${depth * 22}px;flex:0 0 auto"></span>
-          <span class="fname">📁 ${esc(folder.name)}</span>
+          <span class="fname" style="${visible ? '' : 'opacity:.65'}">${visible ? '📁' : '🗂️'} ${esc(folder.name)}</span>
+          ${hiddenTag}
           <span style="color:var(--gray);font-size:.78rem;font-weight:500;white-space:nowrap">· ${meta.join(' · ')}</span>
         </div>
         <label class="ftree-move">Mover a:</label>
         <select class="fselect" style="width:230px;flex:0 0 auto;font-size:.8rem;padding:.4rem .5rem" onchange="moveFolder('${folder.id}', this.value)">${folderMoveOptionsHTML(folder.id, folder.parentId || '')}</select>
         <span style="flex:1"></span>
+        ${visBtn}
         <button class="btn btn-outline btn-sm" onclick="renameFolder('${folder.id}')">✏️ Renombrar</button>
         <button class="btn btn-danger btn-sm" onclick="deleteFolder('${folder.id}')">🗑</button>
       </div>`;
   }).join('');
 }
 
+// Alterna la visibilidad de una carpeta para los clientes (clientVisible).
+async function toggleFolderVisible(id) {
+  const f = folderById(id); if (!f) return;
+  const next = !isClientVisibleFolder(f);   // nuevo estado deseado
+  try {
+    await db.collection('folders').doc(id).update({ clientVisible: next });
+    f.clientVisible = next;   // refleja el cambio en memoria
+    renderFoldersTree();
+  } catch (e) {
+    alert('No se pudo cambiar la visibilidad: ' + (e.message || e));
+  }
+}
+
 async function createFolder() {
   const name = v('new-folder-name');
   const parentId = v('new-folder-parent') || null;
+  const visChk = el('new-folder-visible');
+  const clientVisible = visChk ? visChk.checked : true;
   if (!name) return alert('Escribí un nombre para la carpeta.');
   try {
     await db.collection('folders').add({
-      name, parentId,
+      name, parentId, clientVisible,
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     });
     el('new-folder-name').value = '';
+    if (visChk) visChk.checked = true;   // vuelve al valor por defecto
     await loadFolders();
     renderFoldersTree();
     renderReportsTable();   // refresca los selectores de carpeta por fila
@@ -3000,12 +3049,20 @@ async function loadUserReports() {
   // Si el folderId apunta a una carpeta inexistente (p. ej. borrada), lo tratamos como raíz.
   reports.forEach(r => { if (r.folderId && !folderById(r.folderId)) r.folderId = null; });
   _userReports = reports;
-  // Carpetas visibles = todas las que están en el camino hacia algún informe asignado.
+  // Carpetas navegables por el cliente = las que están en el camino hacia algún
+  // informe asignado Y están marcadas como visibles para clientes. Las carpetas
+  // ocultas (clientVisible === false) se "saltean": su contenido se muestra en la
+  // carpeta visible más cercana hacia arriba (o en la raíz). Esto es recursivo.
   const vis = new Set();
   reports.forEach(r => {
     let fid = r.folderId || null;
     const seen = new Set();
-    while (fid && !seen.has(fid)) { seen.add(fid); vis.add(fid); fid = folderById(fid) ? (folderById(fid).parentId || null) : null; }
+    while (fid && !seen.has(fid)) {
+      seen.add(fid);
+      const f = folderById(fid);
+      if (f && isClientVisibleFolder(f)) vis.add(fid);   // solo carpetas visibles
+      fid = f ? (f.parentId || null) : null;
+    }
   });
   _userVisibleFolderIds = vis;
   _userFolderId = null;
@@ -3013,11 +3070,15 @@ async function loadUserReports() {
   renderUserLevel();
 }
 
-// Cuántos elementos visibles hay directamente dentro de una carpeta
-// (subcarpetas visibles + informes asignados en ese nivel).
+// Cuántos elementos ve el cliente directamente dentro de una carpeta: subcarpetas
+// visibles + informes cuyo "padre visible más cercano" es esta carpeta (así se
+// cuentan también los que provienen de subcarpetas ocultas promovidas a este nivel).
 function countAccessibleInFolder(folderId) {
-  const subs = childFolders(folderId).filter(f => _userVisibleFolderIds.has(f.id)).length;
-  const reps = _userReports.filter(r => (r.folderId || null) === folderId).length;
+  const subs = [..._userVisibleFolderIds]
+    .map(id => folderById(id))
+    .filter(f => f && nearestVisibleFolderFrom(f.parentId || null) === folderId).length;
+  const reps = _userReports
+    .filter(r => nearestVisibleFolderFrom(r.folderId || null) === folderId).length;
   return subs + reps;
 }
 
@@ -3025,7 +3086,8 @@ function userBreadcrumbHTML() {
   const chain = [];
   let cur = _userFolderId ? folderById(_userFolderId) : null;
   const seen = new Set();
-  while (cur && !seen.has(cur.id)) { seen.add(cur.id); chain.unshift(cur); cur = cur.parentId ? folderById(cur.parentId) : null; }
+  // Solo carpetas visibles: las ocultas no son navegables ni aparecen en la ruta.
+  while (cur && !seen.has(cur.id)) { seen.add(cur.id); if (isClientVisibleFolder(cur)) chain.unshift(cur); cur = cur.parentId ? folderById(cur.parentId) : null; }
   let html = `<div class="breadcrumb"><a onclick="enterFolder(null)">🏠 Inicio</a>`;
   chain.forEach((f, i) => {
     html += `<span class="sep">›</span>`;
@@ -3041,9 +3103,16 @@ function enterFolder(id) { _userFolderId = id || null; renderUserLevel(); }
 function renderUserLevel() {
   const cont = el('user-reports-container');
   const here = _userFolderId || null;
-  const subfolders = childFolders(here).filter(f => _userVisibleFolderIds.has(f.id));
+  // Subcarpetas visibles cuyo "padre visible más cercano" es este nivel (las que
+  // cuelgan de carpetas ocultas se promueven hasta acá).
+  const subfolders = [..._userVisibleFolderIds]
+    .map(id => folderById(id))
+    .filter(f => f && nearestVisibleFolderFrom(f.parentId || null) === here)
+    .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'es'));
+  // Informes cuyo "padre visible más cercano" es este nivel (incluye los que
+  // estaban dentro de subcarpetas ocultas).
   const reportsHere = _userReports
-    .filter(r => (r.folderId || null) === here)
+    .filter(r => nearestVisibleFolderFrom(r.folderId || null) === here)
     .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'es'));
 
   // En la raíz sin ninguna carpeta, se ve igual que la grilla plana de antes.
