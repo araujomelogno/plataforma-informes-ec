@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dashboard de campo · Encuesta MSP (Piloto ENFRENT) — Equipos Consultores</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;0,700;1,600&family=Poppins:wght@300;400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1"></script>
+<style>
+:root{
+  --brand:#DD5427; --brand-dark:#B8431C; --brand-soft:#E8845A;
+  --ink:#262320; --charcoal:#211f1d; --gold:#B0925A;
+  --paper:#ffffff; --page:#faf7f2; --line:#e8e0d5;
+  --text:#2b2825; --muted:#857b70;
+  --serif:'Cormorant Garamond',Georgia,'Times New Roman',serif;
+  --sans:'Poppins',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  --gap:16px; --radius:12px;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:var(--sans);background:var(--page);color:var(--text);line-height:1.55;font-weight:300}
+.topbar{background:var(--brand);color:#fff}
+.topbar-inner{max-width:1440px;margin:0 auto;padding:8px 22px;display:flex;gap:26px;justify-content:flex-end;flex-wrap:wrap;font-size:12px;letter-spacing:.5px}
+.topbar-inner .sep{opacity:.5}
+.wrap{max-width:1440px;margin:0 auto;padding:22px}
+.brandhead{display:flex;flex-direction:column;align-items:center;text-align:center;padding:22px 0 8px}
+.logo{display:flex;align-items:center;gap:12px;margin-bottom:22px}
+.badge{display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;border:2.5px solid var(--brand);border-radius:50%;color:var(--brand);font-family:var(--serif);font-style:italic;font-size:28px;font-weight:600;padding-bottom:3px}
+.wm{display:flex;flex-direction:column;line-height:1;text-align:left}
+.wm b{font-family:var(--sans);font-weight:600;letter-spacing:3px;color:var(--ink);font-size:19px}
+.wm small{font-family:var(--sans);font-weight:300;letter-spacing:4.5px;color:var(--muted);font-size:11px;margin-top:3px}
+.eyebrow{font-size:12px;letter-spacing:3px;text-transform:uppercase;color:var(--gold);font-weight:500;margin-bottom:8px}
+.brandhead h1{font-family:var(--serif);font-weight:600;font-size:44px;color:var(--brand);line-height:1.05;letter-spacing:.3px}
+.brandhead .lede{color:var(--muted);font-size:15px;margin-top:8px;font-weight:300}
+.rule{width:120px;height:1px;background:var(--line);margin:20px auto 0;position:relative}
+.rule::before{content:"✦";position:absolute;left:50%;top:50%;transform:translate(-50%,-55%);color:var(--gold);background:var(--page);padding:0 8px;font-size:12px}
+.filterbar{background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:14px 18px;margin:20px 0 var(--gap)}
+.filters{display:flex;gap:16px;align-items:flex-end;flex-wrap:wrap}
+.fg{display:flex;flex-direction:column;gap:5px}
+.fg label{font-size:10.5px;letter-spacing:1.5px;text-transform:uppercase;color:var(--gold);font-weight:500}
+.fg select,.fg input[type=date]{padding:8px 11px;border:1px solid var(--line);border-radius:7px;background:#fff;color:var(--text);font-family:var(--sans);font-size:13px;font-weight:300;min-width:150px}
+.fg select:focus,.fg input:focus{outline:none;border-color:var(--brand)}
+.reset{padding:9px 16px;border:none;border-radius:7px;background:var(--brand);color:#fff;font-family:var(--sans);font-size:12px;letter-spacing:.5px;font-weight:500;cursor:pointer}
+.reset:hover{background:var(--brand-dark)}
+.lastupd{margin-left:auto;text-align:right}
+.lastupd span{font-size:13px;color:var(--ink);font-weight:400}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:var(--gap);margin-bottom:var(--gap)}
+.kpi{background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:18px 20px;box-shadow:0 1px 2px rgba(0,0,0,.03)}
+.kpi .v{font-family:var(--serif);font-size:42px;font-weight:600;line-height:.95;color:var(--accent,var(--brand))}
+.kpi .l{font-size:10.5px;letter-spacing:1.4px;text-transform:uppercase;color:var(--ink);margin-top:12px;display:inline-block;border-bottom:1.5px solid var(--line);padding-bottom:4px;font-weight:500}
+.kpi .s{font-size:12px;color:var(--muted);margin-top:7px;font-weight:300}
+.row{display:grid;gap:var(--gap);margin-bottom:var(--gap)}
+.row.two{grid-template-columns:1fr 1fr}
+.row.full{grid-template-columns:1fr}
+.card{background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:18px 22px;box-shadow:0 1px 2px rgba(0,0,0,.03)}
+.card h3{font-family:var(--serif);font-size:22px;font-weight:600;color:var(--ink);line-height:1.1}
+.card .cap{font-size:12px;color:var(--muted);margin:3px 0 14px;font-weight:300}
+.card canvas{max-height:300px}
+.tall canvas{max-height:340px}
+.xtall canvas{height:600px;max-height:600px}
+.table-wrap{overflow-x:auto;max-height:470px;overflow-y:auto;border-radius:8px}
+table{width:100%;border-collapse:collapse;font-size:12.5px;font-weight:300}
+thead th{position:sticky;top:0;background:var(--ink);color:#f3ece2;text-align:left;padding:10px 11px;font-weight:500;font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;cursor:pointer;white-space:nowrap}
+thead th:hover{color:#fff;background:var(--charcoal)}
+tbody td{padding:9px 11px;border-bottom:1px solid #f1ece4;white-space:nowrap}
+tbody tr:hover{background:#faf6f0}
+.pill{display:inline-block;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:500}
+.count{font-size:12px;color:var(--muted);margin-bottom:10px;font-weight:300}
+.brandfoot{background:var(--charcoal);color:#e9e2d7;text-align:center;padding:34px 20px;margin-top:26px}
+.brandfoot .eyebrow{color:var(--gold);margin-bottom:10px}
+.brandfoot .ft{font-family:var(--serif);font-size:26px;font-weight:600;color:#fff}
+.brandfoot .fs{font-size:12.5px;color:#a49b8e;margin-top:8px;font-weight:300}
+@media(max-width:900px){.row.two{grid-template-columns:1fr}.brandhead h1{font-size:34px}}
+@media print{.filterbar{display:none}body{background:#fff}.card{break-inside:avoid}}
+</style>
+</head>
+<body>
+
+<div class="topbar"><div class="topbar-inner"><span>info@equipos.com.uy</span><span class="sep">|</span><span>Encuesta MSP · Piloto ENFRENT</span><span class="sep">|</span><span>Seguimiento de campo</span></div></div>
+
+<div class="wrap">
+
+  <header class="brandhead">
+    <div class="logo">
+      <span class="badge">e</span>
+      <span class="wm"><b>EQUIPOS</b><small>CONSULTORES</small></span>
+    </div>
+    <div class="eyebrow">✦ Tablero de seguimiento ✦</div>
+    <h1>Dashboard de campo · Encuesta MSP</h1>
+    <p class="lede">Avance del trabajo de campo por estado, encuestador y fecha</p>
+    <div class="rule"></div>
+  </header>
+
+  <div class="filterbar">
+    <div class="filters">
+      <div class="fg"><label>Encuestador</label><select id="f-enc"><option value="all">Todos</option></select></div>
+      <div class="fg"><label>Estado</label><select id="f-est"><option value="all">Todos</option></select></div>
+      <div class="fg"><label>Departamento</label><select id="f-depto"><option value="all">Todos</option></select></div>
+      <div class="fg"><label>Actividad desde</label><input type="date" id="f-d1"></div>
+      <div class="fg"><label>hasta</label><input type="date" id="f-d2"></div>
+      <div class="fg"><button class="reset" id="f-reset">Limpiar filtros</button></div>
+      <div class="fg lastupd"><label>Última actualización</label><span id="last-update">08/07/2026 22:03</span></div>
+    </div>
+  </div>
+
+  <section class="kpis" id="kpis"></section>
+
+  <div class="row full">
+    <div class="card xtall"><h3>Avance por estado</h3><div class="cap">Cantidad de casos en cada estado del proceso de campo</div><canvas id="ch-estado"></canvas></div>
+  </div>
+
+  <div class="row two">
+    <div class="card tall"><h3>Casos por encuestador</h3><div class="cap">Apilado por situación del caso</div><canvas id="ch-enc"></canvas></div>
+    <div class="card tall"><h3>Evolución temporal</h3><div class="cap">Completas y rechazadas por día, con acumulado</div><canvas id="ch-time"></canvas></div>
+  </div>
+
+  <div class="row two">
+    <div class="card"><h3>Análisis por estado</h3><div class="cap">Composición del universo de casos</div><canvas id="ch-result"></canvas></div>
+    <div class="card"><h3>Supervisión</h3><div class="cap">Casos por instancia de supervisión</div><canvas id="ch-sup"></canvas></div>
+  </div>
+
+  <div class="card">
+    <h3>Detalle de casos</h3>
+    <div class="count" id="tbl-count"></div>
+    <div class="table-wrap"><table id="tbl"><thead></thead><tbody></tbody></table></div>
+  </div>
+
+</div>
+
+<footer class="brandfoot">
+  <div class="eyebrow">✦ Equipos Consultores ✦</div>
+  <div class="ft">Transformar información en valor</div>
+  <div class="fs">Tablero de seguimiento de campo (datos de muestra) · Generado <span id="gen-date"></span></div>
+</footer>
+
+<script>
+/* ============================================================
+   DATOS
+   ------------------------------------------------------------
+   Cada caso: { id, encuestador, departamento, detalle, idx,
+     estado (filtro), analisis, rechazada, completo, enSuperv,
+     supervisionNivel, serieEnc, asignacion, actividad, fin }
+   Para datos reales de SurveyToGo/Dooblo: mapeá tus columnas a
+   estos campos y reemplazá 'const CASES = generarDatosMuestra();'.
+   ============================================================ */
+
+const DETALLES = [
+  'Visita Hogar rechazada','Visita Hogar no elegible',
+  'Visita Hogar Elegible - 1 visita','Visita Hogar Elegible - 2 visita','Visita Hogar Elegible - 3 visita','Visita Hogar Elegible - En supervisión',
+  'Visita Individuo rechazada','Visita Individuo no elegible',
+  'Visita Individuo Elegible - 1 visita','Visita Individuo Elegible - 2 visita','Visita Individuo Elegible - 3 visita','Visita Individuo Elegible - En supervisión',
+  'Paso 1 completo - Cuestionario','Paso 2 completo - Mediciones','Paso 3 completo - Glucosa y Colesterol',
+  'Paso 1 rechazo','Paso 2 rechazo','Paso 3 rechazo'
+];
+// color por grupo: -1 sin iniciar (gris) · 0-5 hogar (naranja) · 6-11 individuo (dorado) · 12-14 completos (verde) · 15-17 rechazos (rojo)
+function grupoColor(idx){ return idx<0?'#A89A8C': idx<6?'#DD5427': idx<12?'#C79A4B': idx<15?'#5B8C6E':'#C0392B'; }
+
+const ESTADO_FILTRO = ['Sin iniciar','Visita Hogar','Visita individuo','En proceso','Completos'];
+const ANALISIS = ['Sin asignar','Asignados - En proceso','Asignados - En Supervisión','Rechazados','Completos'];
+const ANALISIS_COLOR = {'Sin asignar':'#A89A8C','Asignados - En proceso':'#DD5427','Asignados - En Supervisión':'#C79A4B','Rechazados':'#C0392B','Completos':'#5B8C6E'};
+const SERIE_ENC = ['Completas','En proceso','En supervisión','Rechazadas'];
+const SERIE_ENC_COLOR = {'Completas':'#5B8C6E','En proceso':'#DD5427','En supervisión':'#C79A4B','Rechazadas':'#C0392B'};
+
+function generarDatosMuestra(){
+  let s = 20260707 >>> 0;
+  const rand = ()=>{ s=(s+0x6D2B79F5)|0; let t=Math.imul(s^s>>>15,1|s); t=(t+Math.imul(t^t>>>7,61|t))^t; return ((t^t>>>14)>>>0)/4294967296; };
+  const pick = a => a[Math.floor(rand()*a.length)];
+  const weighted = pairs => { let tot=pairs.reduce((x,p)=>x+p[1],0),r=rand()*tot; for(const[v,w]of pairs){ if((r-=w)<0)return v; } return pairs[pairs.length-1][0]; };
+  const ENC = ['Ana Pereyra','Diego Suárez','Lucía Methol','Martín Rodríguez','Valentina Cabrera'];
+  const START = new Date('2026-06-08T00:00:00'); const TODAY = new Date('2026-07-07T00:00:00');
+  const dayMs=86400000; const span=Math.round((TODAY-START)/dayMs);
+  const iso = d => d? d.toISOString().slice(0,10) : null;
+  const wDet = [['sin',18],[0,5],[1,4],[2,7],[3,4],[4,2],[5,2],[6,4],[7,2],[8,6],[9,3],[10,2],[11,2],[12,6],[13,5],[14,14],[15,3],[16,2],[17,2]];
+  const rej=[0,6,15,16,17];
+  const out=[];
+  for(let i=1;i<=3600;i++){
+    const p = weighted(wDet);
+    let idx, detalle, sinIniciar=false;
+    if(p==='sin'){ sinIniciar=true; idx=-1; detalle='Sin iniciar'; }
+    else { idx=p; detalle=DETALLES[idx]; }
+    const assigned = sinIniciar ? (rand()<0.30) : true;
+    const encuestador = assigned ? pick(ENC) : '';
+    const departamento = weighted([['Montevideo',7],['Canelones',5],['Maldonado',2],['Colonia',2],['San José',1.5],['Salto',1.5],['Paysandú',1],['Rivera',1]]);
+    const estado = sinIniciar?'Sin iniciar': idx<6?'Visita Hogar': idx<12?'Visita individuo': idx===14?'Completos':'En proceso';
+    const enSuperv = (idx===5||idx===11);
+    const rechazada = rej.includes(idx);
+    const completo = (idx===14);
+    let analisis;
+    if(!assigned) analisis='Sin asignar';
+    else if(sinIniciar) analisis='Asignados - En proceso';
+    else if(enSuperv) analisis='Asignados - En Supervisión';
+    else if(rechazada) analisis='Rechazados';
+    else if(completo) analisis='Completos';
+    else analisis='Asignados - En proceso';
+    const supervisionNivel = enSuperv ? weighted([[1,4],[2,3],[3,2],[4,1]]) : 0;
+    const serieEnc = completo?'Completas': rechazada?'Rechazadas': enSuperv?'En supervisión':'En proceso';
+    let asig=null, fin=null, act=null;
+    if(assigned){
+      const asigOff=Math.floor(Math.pow(rand(),0.8)*(span-4));
+      asig=new Date(START.getTime()+asigOff*dayMs);
+      if(completo||rechazada){ let dur=1+Math.floor(rand()*9); let f=new Date(asig.getTime()+dur*dayMs); if(f>TODAY)f=TODAY; fin=f; act=f; }
+      else { let maxd=Math.round((TODAY-asig)/dayMs); act=new Date(asig.getTime()+Math.floor(rand()*(maxd+1))*dayMs); }
+    }
+    out.push({id:'MSP-'+String(i).padStart(4,'0'), encuestador, departamento, detalle, idx, estado,
+      analisis, rechazada, completo, enSuperv, supervisionNivel, serieEnc,
+      asignacion:iso(asig), actividad:iso(act), fin:iso(fin)});
+  }
+  return out;
+}
+
+const CASES = generarDatosMuestra();
+
+/* ---------------- dashboard ---------------- */
+const $ = id => document.getElementById(id);
+const charts={};
+let sortCol='id', sortDir='asc';
+const MAX_ROWS=400;
+
+function uniq(arr){ return [...new Set(arr)]; }
+function fillSelect(sel, values){ values.forEach(v=>{ const o=document.createElement('option'); o.value=v; o.textContent=v; sel.appendChild(o); }); }
+
+function initFilters(){
+  fillSelect($('f-enc'), uniq(CASES.map(c=>c.encuestador).filter(Boolean)).sort());
+  fillSelect($('f-est'), ESTADO_FILTRO);
+  fillSelect($('f-depto'), uniq(CASES.map(c=>c.departamento)).sort());
+  ['f-enc','f-est','f-depto','f-d1','f-d2'].forEach(id=>$(id).addEventListener('change',render));
+  $('f-reset').addEventListener('click',()=>{ $('f-enc').value='all';$('f-est').value='all';$('f-depto').value='all';$('f-d1').value='';$('f-d2').value=''; render(); });
+}
+
+function getFiltered(){
+  const enc=$('f-enc').value, est=$('f-est').value, depto=$('f-depto').value, d1=$('f-d1').value, d2=$('f-d2').value;
+  return CASES.filter(c=>{
+    if(enc!=='all'&&c.encuestador!==enc) return false;
+    if(est!=='all'&&c.estado!==est) return false;
+    if(depto!=='all'&&c.departamento!==depto) return false;
+    if(d1&&(!c.actividad||c.actividad<d1)) return false;
+    if(d2&&(!c.actividad||c.actividad>d2)) return false;
+    return true;
+  });
+}
+
+function renderKPIs(d){
+  const total=d.length;
+  const visit=d.filter(c=>c.detalle!=='Sin iniciar').length;
+  const comp=d.filter(c=>c.completo).length;
+  const rech=d.filter(c=>c.rechazada).length;
+  const sup=d.filter(c=>c.enSuperv).length;
+  const pct=(n)=>total? (100*n/total).toFixed(0)+'%':'0%';
+  const cards=[
+    {l:'Casos totales',v:total,s:'universo del operativo',c:'#262320'},
+    {l:'Visitados',v:visit,s:pct(visit)+' del total',c:'#DD5427'},
+    {l:'Encuestas completas',v:comp,s:pct(comp)+' de efectividad',c:'#5B8C6E'},
+    {l:'Rechazados',v:rech,s:pct(rech)+' del total',c:'#C0392B'},
+    {l:'En supervisión',v:sup,s:pct(sup)+' en recuperación',c:'#C79A4B'},
+  ];
+  $('kpis').innerHTML=cards.map(k=>`<div class="kpi" style="--accent:${k.c}"><div class="v">${k.v.toLocaleString('es-UY')}</div><div class="l">${k.l}</div><div class="s">${k.s}</div></div>`).join('');
+}
+
+function makeOrUpdate(key, ctxId, cfg){
+  if(charts[key]){ charts[key].data=cfg.data; charts[key].options=cfg.options; charts[key].update('none'); }
+  else charts[key]=new Chart($(ctxId).getContext('2d'), cfg);
+}
+function baseOpts(extra={}){ return Object.assign({responsive:true,maintainAspectRatio:false,animation:false},extra); }
+
+function chartEstado(d){
+  const labels=DETALLES.slice();
+  const data=DETALLES.map((_,i)=>d.filter(c=>c.idx===i).length);
+  const colors=DETALLES.map((_,i)=>grupoColor(i));
+  makeOrUpdate('estado','ch-estado',{type:'bar',data:{labels,datasets:[{data,backgroundColor:colors.map(c=>c+'D0'),borderColor:colors,borderWidth:1,borderRadius:4}]},
+    options:baseOpts({plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>c.parsed.y.toLocaleString('es-UY')+' casos'}}},scales:{x:{grid:{display:false},ticks:{font:{size:10},autoSkip:false,maxRotation:65,minRotation:50}},y:{beginAtZero:true,ticks:{precision:0}}}})});
+}
+
+function chartResult(d){
+  const data=ANALISIS.map(a=>d.filter(c=>c.analisis===a).length);
+  makeOrUpdate('result','ch-result',{type:'doughnut',data:{labels:ANALISIS,datasets:[{data,backgroundColor:ANALISIS.map(a=>ANALISIS_COLOR[a]+'D8'),borderColor:'#fff',borderWidth:2}]},
+    options:baseOpts({cutout:'58%',plugins:{legend:{position:'bottom',labels:{usePointStyle:true,padding:10,font:{size:11}}},tooltip:{callbacks:{label:c=>{const t=c.dataset.data.reduce((a,b)=>a+b,0);return `${c.label}: ${c.parsed.toLocaleString('es-UY')} (${t?(100*c.parsed/t).toFixed(0):0}%)`;}}}}})});
+}
+
+function chartEnc(d){
+  const encs=uniq(CASES.map(c=>c.encuestador).filter(Boolean)).sort();
+  const ds=SERIE_ENC.map(serie=>({label:serie,data:encs.map(e=>d.filter(c=>c.encuestador===e&&c.serieEnc===serie).length),backgroundColor:SERIE_ENC_COLOR[serie]+'DD',borderColor:SERIE_ENC_COLOR[serie],borderWidth:1}));
+  makeOrUpdate('enc','ch-enc',{type:'bar',data:{labels:encs,datasets:ds},
+    options:baseOpts({plugins:{legend:{position:'top',labels:{usePointStyle:true,padding:12,font:{size:11}}}},scales:{x:{stacked:true,grid:{display:false}},y:{stacked:true,beginAtZero:true,ticks:{precision:0}}}})});
+}
+
+function chartTime(d){
+  const all=d.map(c=>c.fin||c.actividad).filter(Boolean).sort();
+  const start=$('f-d1').value|| (all[0]||'2026-06-08');
+  const end=$('f-d2').value|| (all[all.length-1]||'2026-07-07');
+  const days=[]; let cur=new Date(start+'T00:00:00'); const last=new Date(end+'T00:00:00');
+  while(cur<=last){ days.push(cur.toISOString().slice(0,10)); cur=new Date(cur.getTime()+86400000); }
+  const comp=days.map(day=>d.filter(c=>c.completo&&c.fin===day).length);
+  const rech=days.map(day=>d.filter(c=>c.rechazada&&c.fin===day).length);
+  let acc=0; const cum=comp.map(n=>acc+=n);
+  const shortLbl=days.map(x=>x.slice(5));
+  makeOrUpdate('time','ch-time',{data:{labels:shortLbl,datasets:[
+    {type:'bar',label:'Completas por día',data:comp,backgroundColor:'#5B8C6ECC',borderColor:'#5B8C6E',borderWidth:1,borderRadius:3,yAxisID:'y'},
+    {type:'bar',label:'Rechazadas por día',data:rech,backgroundColor:'#C0392BCC',borderColor:'#C0392B',borderWidth:1,borderRadius:3,yAxisID:'y'},
+    {type:'line',label:'Acumulado completas',data:cum,borderColor:'#262320',backgroundColor:'#26232018',borderWidth:2,tension:.3,pointRadius:0,yAxisID:'y1'}
+  ]},options:baseOpts({interaction:{mode:'index',intersect:false},plugins:{legend:{position:'top',labels:{usePointStyle:true,padding:12,font:{size:11}}}},scales:{x:{grid:{display:false},ticks:{maxTicksLimit:12,font:{size:10}}},y:{beginAtZero:true,position:'left',ticks:{precision:0},title:{display:true,text:'Por día',font:{size:10}}},y1:{beginAtZero:true,position:'right',grid:{display:false},title:{display:true,text:'Acumulado',font:{size:10}}}}})});
+}
+
+function chartSup(d){
+  const labels=['Supervisión 1','Supervisión 2','Supervisión 3','Supervisión 4'];
+  const data=[1,2,3,4].map(n=>d.filter(c=>c.enSuperv&&c.supervisionNivel===n).length);
+  const colors=['#C79A4B','#B0863B','#946B2C','#7A551F'];
+  makeOrUpdate('sup','ch-sup',{type:'bar',data:{labels,datasets:[{data,backgroundColor:colors.map(c=>c+'D8'),borderColor:colors,borderWidth:1,borderRadius:4}]},
+    options:baseOpts({plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>c.parsed.y.toLocaleString('es-UY')+' casos'}}},scales:{x:{grid:{display:false}},y:{beginAtZero:true,ticks:{precision:0}}}})});
+}
+
+const COLS=[
+  {f:'id',l:'ID'},{f:'encuestador',l:'Encuestador',fmt:v=>v||'—'},{f:'departamento',l:'Departamento'},
+  {f:'detalle',l:'Estado',fmt:v=>{const i=DETALLES.indexOf(v);const col=grupoColor(i);return `<span class="pill" style="background:${col}22;color:${col}">${v}</span>`;}},
+  {f:'actividad',l:'Últ. actividad',fmt:v=>v||'—'}
+];
+
+function renderTable(d){
+  const thead=$('tbl').querySelector('thead'); const tbody=$('tbl').querySelector('tbody');
+  thead.innerHTML='<tr>'+COLS.map(c=>`<th data-f="${c.f}">${c.l}${sortCol===c.f?(sortDir==='asc'?' ▲':' ▼'):''}</th>`).join('')+'</tr>';
+  thead.querySelectorAll('th').forEach(th=>th.addEventListener('click',()=>{const f=th.dataset.f; if(sortCol===f)sortDir=sortDir==='asc'?'desc':'asc'; else{sortCol=f;sortDir='asc';} render();}));
+  const sorted=[...d].sort((a,b)=>{let x=a[sortCol],y=b[sortCol]; if(x==null)x=''; if(y==null)y=''; const cmp=x<y?-1:x>y?1:0; return sortDir==='asc'?cmp:-cmp;});
+  const shown=sorted.slice(0,MAX_ROWS);
+  tbody.innerHTML=shown.map(r=>'<tr>'+COLS.map(c=>`<td>${c.fmt?c.fmt(r[c.f]):r[c.f]}</td>`).join('')+'</tr>').join('');
+  $('tbl-count').textContent = d.length>MAX_ROWS ? `Mostrando ${MAX_ROWS} de ${d.length.toLocaleString('es-UY')} casos` : `${d.length.toLocaleString('es-UY')} casos`;
+}
+
+function render(){
+  const d=getFiltered();
+  renderKPIs(d); chartEstado(d); chartResult(d); chartEnc(d); chartTime(d); chartSup(d); renderTable(d);
+}
+
+$('gen-date').textContent=new Date().toLocaleDateString('es-UY');
+initFilters();
+render();
+</script>
+</body>
+</html>
