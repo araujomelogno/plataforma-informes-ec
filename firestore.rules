@@ -87,5 +87,19 @@ service cloud.firestore {
       allow create: if isAuth() && request.resource.data.uid == request.auth.uid;
       allow read:   if isAdmin();
     }
+
+    // ── Colección: mail (cola de la extensión Trigger Email) ──
+    // Sólo la Cloud Function (Admin SDK) escribe acá; el Admin SDK NO pasa por
+    // estas reglas. Bloqueamos TODO acceso de clientes: nadie puede leer la cola
+    // ni encolar correos arbitrarios desde el navegador (anti-spam / anti-abuso).
+    match /mail/{docId} {
+      allow read, write: if false;
+    }
+
+    // Colección de plantillas de la extensión (no la usamos, pero la dejamos
+    // cerrada por las dudas).
+    match /templates/{tplId} {
+      allow read, write: if false;
+    }
   }
 }

@@ -4,7 +4,9 @@
     "ignore": [
       "firebase.json",
       "**/.*",
-      "**/node_modules/**"
+      "**/node_modules/**",
+      "functions/**",
+      "extensions/**"
     ],
     "rewrites": [
       {
@@ -12,5 +14,18 @@
         "destination": "/index.html"
       }
     ]
+  },
+  "functions": {
+    "source": "functions",
+    "runtime": "nodejs20"
+  },
+  "firestore": {
+    "rules": "firestore.rules"
+  },
+  "storage": {
+    "rules": "storage.rules"
+  },
+  "extensions": {
+    "firestore-send-email": "firebase/firestore-send-email@0.2.10"
   }
 }
