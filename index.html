@@ -882,6 +882,9 @@
               <option value="">— Raíz —</option>
             </select>
             <input type="text" id="reports-filter" placeholder="🔎 Filtrar por nombre…" oninput="renderReportsTable()" style="flex:1;min-width:220px;max-width:360px" />
+            <select id="reports-creator-filter" class="fselect" style="min-width:200px;max-width:320px" onchange="renderReportsTable()">
+              <option value="">— Todos los creadores —</option>
+            </select>
           </div>
           <div id="reports-table"><div class="loading">Cargando archivos...</div></div>
         </div>
@@ -944,6 +947,9 @@
             <input type="text" id="users-filter" placeholder="🔎 Filtrar por email…" oninput="renderUsersTable()" style="flex:1;min-width:220px;max-width:360px" />
             <select id="users-domain-filter" class="fselect" style="min-width:200px;max-width:320px" onchange="renderUsersTable()">
               <option value="">— Todos los dominios —</option>
+            </select>
+            <select id="users-creator-filter" class="fselect" style="min-width:200px;max-width:320px" onchange="renderUsersTable()">
+              <option value="">— Todos los creadores —</option>
             </select>
           </div>
           <div id="users-table"><div class="loading">Cargando usuarios...</div></div>
@@ -1662,6 +1668,28 @@ function renderMatrix() {
   </table></div>`;
 }
 
+// Repuebla un combobox de filtro "Creado por" con los valores distintos de
+// 'creadoPor' presentes en la lista de items, preservando la selección actual.
+// Agrega la opción especial "— Sin registro —" si hay items sin creador.
+function refreshCreatorFilter(selectId, items, selected) {
+  const s = el(selectId); if (!s) return;
+  const creators = [...new Set(items.map(x => x && x.creadoPor).filter(Boolean))]
+    .sort((a, b) => String(a).localeCompare(String(b), 'es', { sensitivity: 'base' }));
+  const hasSinRegistro = items.some(x => !x || !x.creadoPor);
+  const sel = selected || '';
+  s.innerHTML = `<option value="">— Todos los creadores —</option>` +
+    creators.map(c => `<option value="${esc(c)}" ${sel === c ? 'selected' : ''}>${esc(c)}</option>`).join('') +
+    (hasSinRegistro ? `<option value="__none__" ${sel === '__none__' ? 'selected' : ''}>— Sin registro —</option>` : '');
+}
+
+// ¿El item coincide con el filtro de creador seleccionado?
+// '' = todos; '__none__' = sin creador registrado; en otro caso, email exacto.
+function matchesCreatorFilter(item, filterVal) {
+  if (!filterVal) return true;
+  if (filterVal === '__none__') return !(item && item.creadoPor);
+  return item && item.creadoPor === filterVal;
+}
+
 function renderReportsTable() {
   el('reports-count').textContent = allReports.length;
 
@@ -1670,6 +1698,9 @@ function renderReportsTable() {
   const selFolderId = (el('reports-folder-filter') && el('reports-folder-filter').value) || '';
   const fid = selFolderId || null;
   const nameF = (el('reports-filter') && el('reports-filter').value || '').trim().toLowerCase();
+  const creatorF = (el('reports-creator-filter') && el('reports-creator-filter').value) || '';
+  // Repoblar el combo de creadores con los valores globales de informes.
+  refreshCreatorFilter('reports-creator-filter', allReports, creatorF);
 
   let subfolders = childFolders(fid);
   let files = allReports.filter(r => (r.folderId || null) === fid);
@@ -1677,6 +1708,7 @@ function renderReportsTable() {
     subfolders = subfolders.filter(f => String(f.name || '').toLowerCase().includes(nameF));
     files = files.filter(r => String(r.name || '').toLowerCase().includes(nameF));
   }
+  if (creatorF) files = files.filter(r => matchesCreatorFilter(r, creatorF));
 
   // Breadcrumb con la ruta actual (segmentos clicables).
   const path = folderPath(fid);
@@ -1687,8 +1719,9 @@ function renderReportsTable() {
   const breadcrumb = `<div style="padding:.2rem 0 .7rem;font-size:.82rem;color:var(--gray)">${crumbs.join(' <span style="color:var(--border)">›</span> ')}</div>`;
 
   if (!subfolders.length && !files.length) {
-    el('reports-table').innerHTML = breadcrumb + emptyHTML(nameF ? '🔎' : '📭',
-      nameF ? 'Nada coincide con la búsqueda en esta carpeta.' : 'Esta carpeta no tiene subcarpetas ni archivos.');
+    const filtering = nameF || creatorF;
+    el('reports-table').innerHTML = breadcrumb + emptyHTML(filtering ? '🔎' : '📭',
+      filtering ? 'Nada coincide con la búsqueda en esta carpeta.' : 'Esta carpeta no tiene subcarpetas ni archivos.');
     return;
   }
 
@@ -1701,6 +1734,7 @@ function renderReportsTable() {
           <td style="color:var(--gray)">—</td>
           <td style="color:var(--gray)">${fmtDate(f.createdAt)}</td>
           <td style="color:var(--gray)">—</td>
+          <td style="color:var(--gray)">—</td>
           <td><div class="td-actions"><button class="btn btn-outline btn-sm" onclick="event.stopPropagation();setReportsFolderFilter('${f.id}')">📂 Abrir</button></div></td>
         </tr>`;
   }).join('');
@@ -1710,6 +1744,7 @@ function renderReportsTable() {
           <td style="font-weight:600">${fileIcon(r.name)} ${esc(r.name)}${(() => { const n = reportAccessCounts[r.id] || 0; return `<span class="ucount-badge ${n ? 'has' : ''}" title="${n} usuario${n === 1 ? '' : 's'} con acceso">👤 ${n}</span>`; })()}</td>
           <td style="color:var(--gray)">${fmtSize(r.size)}</td>
           <td style="color:var(--gray)">${fmtDate(r.createdAt)}${r.updatedAt ? `<br><span style="font-size:.72rem" title="Última reescritura">✏️ ${fmtDate(r.updatedAt)}</span>` : ''}</td>
+          <td style="color:var(--gray)">${r.creadoPor ? esc(r.creadoPor) : '—'}</td>
           <td><select class="fselect" style="min-width:150px;font-size:.8rem;padding:.4rem .5rem" onchange="moveReport('${r.id}', this.value)">${folderOptionsHTML(r.folderId || '')}</select></td>
           <td><div class="td-actions">
             <button class="btn btn-outline btn-sm" onclick="previewReport('${r.storagePath}','${esc(r.name)}')">👁 Ver</button>
@@ -1724,7 +1759,7 @@ function renderReportsTable() {
 
   el('reports-table').innerHTML = breadcrumb + `
     <table>
-      <thead><tr><th>Nombre</th><th>Tamaño</th><th>Fecha</th><th>Carpeta</th><th>Acciones</th></tr></thead>
+      <thead><tr><th>Nombre</th><th>Tamaño</th><th>Fecha</th><th>Creado por</th><th>Carpeta</th><th>Acciones</th></tr></thead>
       <tbody>
         ${folderRows}${fileRows}
       </tbody>
@@ -1786,7 +1821,10 @@ async function uploadFiles(files) {
                 name: file.name, storagePath: path, size: file.size,
                 ext: extOf(file.name),
                 folderId: uploadFolderId,   // null = raíz
-                createdAt: firebase.firestore.FieldValue.serverTimestamp()
+                createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+                // Quién creó el informe (usuario admin autenticado).
+                creadoPor: (currentUser && currentUser.email) || null,
+                creadoPorUid: (currentUser && currentUser.uid) || null
               });
               res();
             } catch (e) {
@@ -2652,7 +2690,9 @@ function renderUsersTable() {
   el('users-count').textContent = allUsers.length;
   const emailF  = (el('users-filter') && el('users-filter').value || '').trim().toLowerCase();
   const domainF = (el('users-domain-filter') && el('users-domain-filter').value) || '';
+  const creatorF = (el('users-creator-filter') && el('users-creator-filter').value) || '';
   refreshDomainFilter(domainF);
+  refreshCreatorFilter('users-creator-filter', allUsers, creatorF);
 
   if (!allUsers.length) {
     el('users-table').innerHTML = emptyHTML('👤', 'No hay usuarios registrados aún');
@@ -2661,13 +2701,14 @@ function renderUsersTable() {
   let rows = allUsers;
   if (emailF)  rows = rows.filter(u => String(u.email || '').toLowerCase().includes(emailF));
   if (domainF) rows = rows.filter(u => emailDomain(u.email) === domainF);
+  if (creatorF) rows = rows.filter(u => matchesCreatorFilter(u, creatorF));
   if (!rows.length) {
     el('users-table').innerHTML = emptyHTML('🔎', 'Ningún usuario coincide con los filtros.');
     return;
   }
   el('users-table').innerHTML = `
     <table>
-      <thead><tr><th>Email</th><th>Rol</th><th>Creado</th><th>Acciones</th></tr></thead>
+      <thead><tr><th>Email</th><th>Rol</th><th>Creado</th><th>Creado por</th><th>Acciones</th></tr></thead>
       <tbody>
         ${rows.map(u => {
           const isAdmin = u.role === 'admin';
@@ -2688,6 +2729,7 @@ function renderUsersTable() {
           <td style="font-weight:600">${esc(u.email)}</td>
           <td><span class="badge ${isAdmin ? 'badge-admin' : 'badge-user'}">${isAdmin ? 'admin' : 'usuario'}</span></td>
           <td style="color:var(--gray)">${fmtDate(u.createdAt)}</td>
+          <td style="color:var(--gray)">${u.creadoPor ? esc(u.creadoPor) : '—'}</td>
           <td><div class="td-actions">
             ${permBtn}
             ${paramsBtn}
@@ -2751,7 +2793,10 @@ async function provisionUser(email, pass) {
   if (data.error) throw new Error(data.error.message);
   await db.collection('users').doc(data.localId).set({
     email, role: 'user',
-    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+    // Quién creó el usuario (el admin autenticado que ejecuta el alta).
+    creadoPor: (currentUser && currentUser.email) || null,
+    creadoPorUid: (currentUser && currentUser.uid) || null
   });
   return data.localId;
 }
