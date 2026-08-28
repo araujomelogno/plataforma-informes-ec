@@ -2552,6 +2552,7 @@ function reportUserOptsHTML(uid, reportId, opts) {
         ${expVal ? `<button type="button" class="btn btn-outline btn-sm" style="flex:0 0 auto;padding:.15rem .45rem;font-size:.68rem" onclick="clearReportUserExpiry('${uid}','${reportId}')">✕</button>` : ''}
       </div>
     </label>
+    ${grantAttrHTML(opts)}
   </div>`;
 }
 
@@ -3009,6 +3010,7 @@ async function loadUserPermissions() {
               ${expVal ? `<button type="button" class="btn btn-outline btn-sm" style="flex:0 0 auto;padding:.15rem .45rem;font-size:.68rem" onclick="clearExpiry('${userId}','${r.id}',this)">✕</button>` : ''}
             </div>
           </div>
+          ${on ? grantAttrHTML(optsMap[r.id]) : ''}
         </div>
       </div>`;
       }).join('')}
@@ -3026,6 +3028,13 @@ async function grantReportToUser(userId, reportId, grant) {
   if (grant) {
     if (!ids.includes(reportId)) ids.push(reportId);
     if (!options[reportId]) options[reportId] = Object.assign({}, DEFAULT_OPTS);
+    // Auditoría: dejar registro de qué admin concedió el acceso y cuándo. Se
+    // guarda junto a las opciones del informe (userAccess/{uid}.options[reportId]),
+    // así queda asociado a cada par usuario+informe y se lee sin consultas extra.
+    options[reportId].grantedByUid   = (currentUser && currentUser.uid) || null;
+    options[reportId].grantedByEmail = (currentUser && currentUser.email) ||
+                                       (currentUserData && currentUserData.email) || null;
+    options[reportId].grantedAt      = new Date().toISOString();
   } else {
     ids = ids.filter(x => x !== reportId);
   }
@@ -3050,6 +3059,10 @@ async function togglePerm(userId, reportId, cb) {
       if (on) i.checked = !!o[i.dataset.optkey];
     });
     box.querySelectorAll('input[data-expiry]').forEach(i => { i.disabled = !on; });
+    // Actualizar la línea "Asignado por …": mostrarla al conceder, quitarla al revocar.
+    const oldAttr = box.querySelector('.perm-attr');
+    if (oldAttr) oldAttr.remove();
+    if (on) box.insertAdjacentHTML('beforeend', grantAttrHTML(options[reportId]));
   }
 }
 
@@ -4149,6 +4162,17 @@ const OPT_DEFS = [
   { key: 'noCopy',     icon: '🖱️', label: 'Bloquear clic derecho / selección' },
 ];
 function mergeOpts(o) { return Object.assign({}, DEFAULT_OPTS, o || {}); }
+
+// Registro de asignación: quién (admin) concedió el acceso a este informe y cuándo.
+// Se guarda en las opciones del par usuario+informe (ver grantReportToUser).
+// Devuelve una línea informativa, o '' si el dato no existe (accesos antiguos).
+function grantAttrHTML(opts) {
+  const who = opts && opts.grantedByEmail;
+  if (!who) return '';
+  const when = opts.grantedAt ? fmtDateTime(opts.grantedAt) : '';
+  return `<div class="perm-attr" style="font-size:.7rem;color:var(--gray);font-weight:500;padding:.15rem 0 0">`
+    + `👤 Asignado por <b>${esc(who)}</b>${when ? ` · ${when}` : ''}</div>`;
+}
 
 // ── Caducidad de acceso (por usuario + informe) ──
 // El admin puede fijar una fecha de caducidad, guardada en
