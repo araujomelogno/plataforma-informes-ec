@@ -203,6 +203,33 @@ En **Panel Admin → Permisos**, dentro de cada informe asignado a un usuario, s
 
 ---
 
+## 🧾 Registro de asignación (quién asignó cada informe)
+
+Cada vez que un administrador le **da acceso** a un informe a un cliente, el
+portal deja registro de **qué usuario de la plataforma** hizo la asignación y
+**cuándo**. Debajo de las protecciones de cada informe asignado aparece la línea:
+
+> 👤 Asignado por **admin@empresa.com** · 28/08/2026 14:35
+
+Se puede consultar desde los dos lados:
+
+- **Panel Admin → Permisos** → elegí un cliente y vas a ver, en cada informe que
+  tiene asignado, quién se lo asignó y cuándo.
+- **Panel Admin → Informes → 👥 (usuarios con acceso)** → elegí un informe y vas
+  a ver, junto a cada cliente con acceso, quién le concedió ese acceso.
+
+El dato se guarda junto a los permisos del par cliente + informe
+(`userAccess/{uid}.options[reportId]`: `grantedByEmail`, `grantedByUid`,
+`grantedAt`). Refleja la **última asignación**: si se revoca y luego se vuelve a
+asignar, se registra al administrador y la fecha de esa nueva asignación. Los
+accesos concedidos **antes** de esta actualización no muestran el registro (no
+había dato); vuelven a registrarse la próxima vez que se asignen.
+
+> No requiere cambios en las reglas de Firestore: el administrador ya puede
+> escribir `userAccess`, y cada cliente solo lee su propio documento de acceso.
+
+---
+
 ## 📂 Carpetas (organización de informes)
 
 En **Panel Admin → Informes → Carpetas** se pueden crear carpetas (anidadas)
