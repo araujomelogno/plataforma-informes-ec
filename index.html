@@ -16,20 +16,38 @@
        de window.firebaseConfig (definida en el <script> principal). -->
   <script type="module">
     import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.0/firebase-app.js';
-    import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword,
+    import { getAuth, connectAuthEmulator, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword,
              sendPasswordResetEmail, sendEmailVerification, signOut, multiFactor, TotpMultiFactorGenerator, getMultiFactorResolver }
       from 'https://www.gstatic.com/firebasejs/10.7.0/firebase-auth.js';
-    import { getFirestore, collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, addDoc,
+    import { getFirestore, connectFirestoreEmulator, collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, addDoc,
              query, where, orderBy, limit, writeBatch, serverTimestamp, increment, deleteField }
       from 'https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore.js';
-    import { getStorage, ref as storageRef, uploadBytesResumable, getDownloadURL, deleteObject }
+    import { getStorage, connectStorageEmulator, ref as storageRef, uploadBytesResumable, getDownloadURL, deleteObject }
       from 'https://www.gstatic.com/firebasejs/10.7.0/firebase-storage.js';
+    import { getFunctions, connectFunctionsEmulator, httpsCallable }
+      from 'https://www.gstatic.com/firebasejs/10.7.0/firebase-functions.js';
 
     try {
       const app = initializeApp(window.firebaseConfig);
       const mAuth = getAuth(app);
       const mDb = getFirestore(app);
       const mStorage = getStorage(app);
+      // Cloud Functions (alta de usuarios, reenvío de acceso, correos). La región
+      // tiene que coincidir con la de las funciones (functions/.env → REGION).
+      const mFunctions = getFunctions(app, window.FUNCTIONS_REGION || 'us-central1');
+
+      // Desarrollo local: con `firebase emulators:start` y la URL
+      // http://localhost:5000/?emu=1 el portal usa los emuladores (Auth,
+      // Firestore, Storage, Functions) en vez del proyecto real. Solo en localhost.
+      if (/^(localhost|127\.0\.0\.1)$/.test(location.hostname) &&
+          (new URLSearchParams(location.search).has('emu') || sessionStorage.getItem('emu') === '1')) {
+        sessionStorage.setItem('emu', '1');
+        connectAuthEmulator(mAuth, 'http://127.0.0.1:9099', { disableWarnings: true });
+        connectFirestoreEmulator(mDb, '127.0.0.1', 8080);
+        connectStorageEmulator(mStorage, '127.0.0.1', 9199);
+        connectFunctionsEmulator(mFunctions, '127.0.0.1', 5001);
+        console.info('Portal conectado a los emuladores de Firebase.');
+      }
 
       // ── Fachada Firestore (forma "compat" sobre primitivas modulares) ──
       const wrapDocSnap = (s) => ({ exists: s.exists(), id: s.id, data: () => s.data(), ref: wrapDoc(s.ref) });
@@ -114,6 +132,8 @@
 
       window.firebase = { initializeApp: () => app, auth: () => auth, firestore: firestoreNs, storage: () => storage };
       window.auth = auth; window.db = db; window.storage = storage;
+      // callFn('crearUsuario', {email}) → datos que devuelve la función.
+      window.callFn = (name, data) => httpsCallable(mFunctions, name)(data || {}).then(r => r.data);
 
       // 2FA/TOTP sobre la MISMA app (ya comparte sesión con Firestore/Storage).
       window.__mfa = {
@@ -687,6 +707,47 @@
       font-family: inherit; font-size: 0.82rem; color: var(--dark);
     }
 
+    /* Casilla "Avisar al usuario por correo" (Permisos y modal de usuarios) */
+    .notify-toggle {
+      display: flex; align-items: center; gap: .5rem; margin: .2rem 0 .9rem;
+      font-size: .78rem; font-weight: 600; letter-spacing: 0; text-transform: none;
+      color: var(--dark); cursor: pointer;
+    }
+    .notify-toggle input { width: auto; margin: 0; accent-color: var(--orange); }
+
+    /* Configuración → Correos */
+    textarea.ftextarea {
+      width: 100%; padding: 0.75rem 1rem; border: 1.5px solid var(--border); border-radius: 3px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.8rem;
+      line-height: 1.5; color: var(--dark2); background: var(--white); outline: none; resize: vertical;
+    }
+    textarea.ftextarea:focus { border-color: var(--orange); box-shadow: 0 0 0 3px rgba(233,100,54,0.12); }
+    input[type=number].fnumber {
+      width: 110px; padding: 0.75rem 1rem; border: 1.5px solid var(--border); border-radius: 3px;
+      font-family: 'Montserrat', sans-serif; font-size: 0.9rem; font-weight: 500;
+    }
+    .tpl-box { border: 1px solid var(--border); border-radius: 6px; padding: 1rem 1.1rem; margin-bottom: 1.1rem; }
+    .tpl-head { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin-bottom: .8rem; }
+    .tpl-title { font-weight: 800; font-size: .92rem; color: var(--dark); }
+    .tpl-vars { display: flex; flex-wrap: wrap; gap: .35rem; margin: .45rem 0 .2rem; }
+    .var-chip {
+      border: 1px dashed var(--orange); background: var(--orange-light); color: var(--orange-dark);
+      border-radius: 3px; padding: .15rem .45rem; font-size: .72rem; font-weight: 700; cursor: pointer;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .tpl-errors { color: #8B1A0A; font-size: .78rem; font-weight: 600; margin: .4rem 0 0; }
+    .tpl-preview {
+      white-space: pre-wrap; word-break: break-word; background: #FAFAFA; border: 1px solid var(--border);
+      border-radius: 3px; padding: .8rem 1rem; font-size: .78rem; line-height: 1.5; margin: .6rem 0 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .tpl-actions { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: .8rem; }
+    .mail-quota { font-size: .8rem; color: var(--gray); font-weight: 600; }
+    .mail-state { font-weight: 700; font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; }
+    .mail-state.enviado { color: #2E7D32; }
+    .mail-state.fallido { color: #B83A26; }
+    .mail-state.omitido { color: var(--gray); }
+
     /* Diálogo modal (accesos por usuario) */
     .modal-backdrop {
       position: fixed; inset: 0; background: rgba(58,56,56,0.6);
@@ -795,6 +856,12 @@
       <button class="nav-item" id="nav-clientdocs" onclick="switchTab('clientdocs', this)">
         <span class="nav-icon">📥</span> Docs de clientes
       </button>
+      <button class="nav-item" id="nav-config" onclick="switchTab('config-correos', document.getElementById('nav-config-correos'))">
+        <span class="nav-icon">⚙️</span> Configuración
+      </button>
+      <button class="nav-item nav-subitem" id="nav-config-correos" onclick="switchTab('config-correos', this)">
+        <span class="nav-icon">▪</span> Correos
+      </button>
 
       <div class="sidebar-footer">
         <div class="user-pill">
@@ -901,19 +968,17 @@
           <div class="card-header"><span class="card-header-title">Crear nuevo usuario</span></div>
           <div class="card-body">
             <div id="user-create-alert"></div>
-            <div class="two-col">
+            <div style="display:grid;grid-template-columns:1fr auto;gap:1rem;align-items:end">
               <div class="form-group" style="margin:0">
                 <label>Email</label>
                 <input type="email" id="new-user-email" placeholder="usuario@empresa.com" />
               </div>
-              <div class="form-group" style="margin:0">
-                <label>Contraseña temporal</label>
-                <input type="text" id="new-user-pass" placeholder="mínimo 6 caracteres" />
-              </div>
-              <button class="btn btn-orange" onclick="createUser()">＋ Crear</button>
+              <button class="btn btn-orange" id="user-create-btn" onclick="createUser()">＋ Crear</button>
             </div>
             <p style="font-size:0.74rem; color:var(--gray); margin-top:0.9rem; font-weight:500">
-              💡 El usuario podrá cambiar su contraseña desde Firebase console.
+              ✉️ No hace falta inventar una contraseña: el usuario recibe un correo de
+              <strong>notificaciones@equipos.com.uy</strong> con un enlace para crear la suya.
+              Si el correo no sale, vas a ver el enlace una sola vez para pasárselo por otro canal.
             </p>
           </div>
         </div>
@@ -923,9 +988,10 @@
           <div class="card-body">
             <div id="user-import-alert"></div>
             <p style="font-size:0.78rem; color:var(--gray); margin-bottom:0.9rem; font-weight:500">
-              Subí un archivo <strong>.xlsx</strong>, <strong>.xls</strong> o <strong>.csv</strong> con dos columnas:
-              <strong>email</strong> (1ª columna) y <strong>contraseña</strong> (2ª columna, mínimo 6 caracteres).
-              La primera fila puede ser el encabezado (se detecta y omite).
+              Subí un archivo <strong>.xlsx</strong>, <strong>.xls</strong> o <strong>.csv</strong> con una sola columna:
+              <strong>email</strong> (1ª columna). La primera fila puede ser el encabezado (se detecta y omite).
+              Cada usuario recibe por correo su enlace para crear la contraseña. Si el archivo trae
+              contraseñas en la 2ª columna, se ignoran.
             </p>
             <div class="two-col">
               <div class="form-group" style="margin:0">
@@ -1074,6 +1140,38 @@
         </div>
       </div>
 
+      <div id="tab-config-correos" class="hidden">
+        <div class="page-header">
+          <div class="accent-bar"></div>
+          <h2>Configuración · <span class="accent">Correos</span></h2>
+          <p>Textos de los correos que manda el portal, remitente y registro de envíos</p>
+        </div>
+        <div class="card">
+          <div class="card-header"><span class="card-header-title">Remitente y envío</span></div>
+          <div class="card-body" id="cfg-mail-general"><div class="loading">Cargando…</div></div>
+        </div>
+        <div class="card">
+          <div class="card-header"><span class="card-header-title">Plantillas</span></div>
+          <div class="card-body" id="cfg-mail-templates"><div class="loading">Cargando…</div></div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <span class="card-header-title">Últimos envíos</span>
+            <button class="btn btn-outline btn-sm" onclick="refreshMailLog()">↻ Actualizar</button>
+          </div>
+          <div style="padding:.9rem 1.25rem 0;display:flex;gap:.8rem;flex-wrap:wrap;align-items:center">
+            <select id="maillog-filter" class="fselect" style="max-width:220px" onchange="loadMailLog()">
+              <option value="">Todos los envíos</option>
+              <option value="fallido">Solo fallidos</option>
+              <option value="omitido">Solo omitidos</option>
+              <option value="enviado">Solo enviados</option>
+            </select>
+            <span id="maillog-quota" class="mail-quota"></span>
+          </div>
+          <div id="maillog-table"><div class="loading">Cargando…</div></div>
+        </div>
+      </div>
+
       <div id="tab-matrix" class="hidden">
         <div class="page-header">
           <div class="accent-bar"></div>
@@ -1184,6 +1282,10 @@ const firebaseConfig = {
 // TOTP de 2FA sólo existe en modular). Publicamos la config para ese módulo y
 // declaramos las referencias, que se completan en boot() cuando el módulo avisa.
 window.firebaseConfig = firebaseConfig;
+// Región de las Cloud Functions (functions/): la misma que REGION en
+// functions/.env, que a su vez es la región de Firestore del proyecto.
+const FUNCTIONS_REGION = 'us-central1';
+window.FUNCTIONS_REGION = FUNCTIONS_REGION;
 let auth, db, storage;
 
 let currentUser = null, currentUserData = null;
@@ -1500,7 +1602,10 @@ async function doLogin() {
 async function doLogout() { await endSession(); auth.signOut(); }
 
 // Autoservicio desde el login: el usuario pide un enlace para restablecer su
-// contraseña. Firebase envía el correo (en español, ver auth.languageCode).
+// contraseña. Lo manda la Cloud Function solicitarRestablecimiento desde
+// notificaciones@equipos.com.uy (plantilla "Restablecer", la misma casilla que
+// el resto de los correos del portal). Si la función no responde, caemos al
+// correo por defecto de Firebase (en español, ver auth.languageCode).
 // Por seguridad no revelamos si el email existe o no (anti-enumeración).
 async function forgotPassword() {
   const email = v('login-email');
@@ -1513,18 +1618,23 @@ async function forgotPassword() {
     return showAlert('login-alert', 'error', '❌ El email no es válido.');
   }
   try {
-    await auth.sendPasswordResetEmail(email);
-  } catch (err) {
-    const code = (err && err.code) || '';
-    // A propósito NO distinguimos "usuario no encontrado": mostramos siempre el
-    // mismo mensaje para no filtrar qué correos están registrados.
-    if (code === 'auth/invalid-email') {
-      return showAlert('login-alert', 'error', '❌ El email no es válido.');
+    await callFn('solicitarRestablecimiento', { email });
+  } catch (fnErr) {
+    console.warn('solicitarRestablecimiento no respondió; uso el correo de Firebase:', fnErr);
+    try {
+      await auth.sendPasswordResetEmail(email);
+    } catch (err) {
+      const code = (err && err.code) || '';
+      // A propósito NO distinguimos "usuario no encontrado": mostramos siempre el
+      // mismo mensaje para no filtrar qué correos están registrados.
+      if (code === 'auth/invalid-email') {
+        return showAlert('login-alert', 'error', '❌ El email no es válido.');
+      }
+      if (code === 'auth/too-many-requests') {
+        return showAlert('login-alert', 'error', '⏳ Demasiados intentos. Esperá unos minutos e intentá de nuevo.');
+      }
+      // Otros errores (incluido user-not-found): caemos al mensaje neutro de éxito.
     }
-    if (code === 'auth/too-many-requests') {
-      return showAlert('login-alert', 'error', '⏳ Demasiados intentos. Esperá unos minutos e intentá de nuevo.');
-    }
-    // Otros errores (incluido user-not-found): caemos al mensaje neutro de éxito.
   }
   showAlert('login-alert', 'success',
     `<span>✅ Si existe una cuenta con <strong>${esc(email)}</strong>, te enviamos un correo con el enlace para elegir una contraseña nueva.<br>Revisá tu bandeja de entrada (y la carpeta de spam).</span>`);
@@ -1559,17 +1669,19 @@ async function renderUser() {
 
 /* ── TABS ── */
 function switchTab(tab, btn) {
-  ['reports','users','permissions','matrix','metrics-summary','metrics-sessions','metrics-dashboards','clientdocs'].forEach(t =>
+  ['reports','users','permissions','matrix','metrics-summary','metrics-sessions','metrics-dashboards','clientdocs','config-correos'].forEach(t =>
     el('tab-'+t).classList.toggle('hidden', t !== tab));
   document.querySelectorAll('.nav-item').forEach(b => { b.classList.remove('active'); b.classList.remove('active-parent'); });
   if (btn) btn.classList.add('active');
   // El padre "Métricas" queda resaltado mientras se ve cualquiera de sus sub-páginas.
   const nm = el('nav-metrics'); if (nm && tab.indexOf('metrics') === 0) nm.classList.add('active-parent');
+  const nc = el('nav-config');  if (nc && tab.indexOf('config') === 0)  nc.classList.add('active-parent');
   if (tab === 'permissions') populatePermSelect();
   if (tab === 'matrix') loadMatrix();
   if (tab === 'metrics-summary' || tab === 'metrics-sessions') loadMetrics();
   if (tab === 'metrics-dashboards') loadDashboardAnalytics();
   if (tab === 'clientdocs') loadClientDocs();
+  if (tab === 'config-correos') loadMailConfig();
 }
 
 /* ── REPORTS ── */
@@ -2469,6 +2581,7 @@ function reportUsersShellHTML() {
     <p style="font-size:.85rem;color:var(--gray);font-weight:500;margin:0 0 .7rem">
       Elegí qué usuarios pueden ver <b>${esc(st.name)}</b>. Los cambios se guardan automáticamente.
     </p>
+    ${notifyCheckboxHTML('report-users-notify')}
     <input type="text" id="report-users-filter" placeholder="Buscar usuario por email…"
       oninput="renderReportUsersList()" style="width:100%;margin-bottom:.6rem" />
     <div id="report-users-count" style="font-size:.78rem;color:var(--gray);font-weight:600;margin-bottom:.5rem"></div>
@@ -2507,7 +2620,7 @@ async function toggleReportUser(uid, grant, cb) {
   const st = _reportUsersModal; if (!st) return;
   if (cb) cb.disabled = true;
   try {
-    const options = await grantReportToUser(uid, st.reportId, grant);
+    const options = await grantReportToUser(uid, st.reportId, grant, notifyChecked('report-users-notify'));
     const u = st.users.find(x => x.uid === uid);
     if (u) { u.has = grant; if (grant) u.opts = options[st.reportId] || {}; }
     // Mostrar/ocultar las opciones de permisos de ese usuario en el momento
@@ -2736,7 +2849,7 @@ function renderUsersTable() {
             ${paramsBtn}
             ${mfaBtn}
             <button class="btn btn-outline btn-sm" onclick="showUserAccess('${u.id}','${esc(u.email)}')">👁 Accesos</button>
-            <button class="btn btn-outline btn-sm" onclick="resetUserPassword('${esc(u.email)}')">🔑 Restablecer contraseña</button>
+            <button class="btn btn-outline btn-sm" onclick="reenviarAccesoUsuario('${u.id}','${esc(u.email)}')" title="Genera un enlace nuevo y se lo manda por correo${u.reenvios ? ` · ${u.reenvios} reenvío(s)` : ''}">📨 Reenviar acceso</button>
             ${roleBtn}
             ${delBtn}
           </div></td>
@@ -2781,42 +2894,90 @@ async function changeRole(uid, email, newRole) {
   }
 }
 
-// Crea la cuenta de autenticación (sin cerrar la sesión del admin, gracias a
-// returnSecureToken:false) y su documento en Firestore. Reutilizado por la
-// creación individual y por la importación masiva.
-async function provisionUser(email, pass) {
-  const res = await fetch(
-    `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${firebaseConfig.apiKey}`,
-    { method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ email, password: pass, returnSecureToken: false }) }
-  );
-  const data = await res.json();
-  if (data.error) throw new Error(data.error.message);
-  await db.collection('users').doc(data.localId).set({
-    email, role: 'user',
-    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-    // Quién creó el usuario (el admin autenticado que ejecuta el alta).
-    creadoPor: (currentUser && currentUser.email) || null,
-    creadoPorUid: (currentUser && currentUser.uid) || null
-  });
-  return data.localId;
+// ── Alta de usuarios (Cloud Function crearUsuario, solo admins) ──
+// El admin escribe solo el email. La función crea la cuenta con una clave al
+// azar que nadie conoce, el doc users/{uid} (role 'user', creadoPor, …) y le
+// manda al usuario el correo de bienvenida desde notificaciones@equipos.com.uy
+// con el enlace para crear su contraseña. Si el correo falla, el alta igual
+// queda hecha y la función devuelve el enlace UNA vez para pasarlo a mano.
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// Mensaje legible para un error de una Cloud Function (callable).
+function fnErrorMsg(err) {
+  const code = String((err && err.code) || '').replace('functions/', '');
+  if (code === 'permission-denied') return 'Solo un administrador puede hacer esto.';
+  if (code === 'unauthenticated')   return 'Tu sesión venció: volvé a iniciar sesión.';
+  if (code === 'internal' || code === 'unavailable' || code === 'deadline-exceeded')
+    return 'No se pudo contactar al servidor. Revisá tu conexión (o que las Cloud Functions estén desplegadas).';
+  return (err && err.message) || String(err);
 }
 
 async function createUser() {
-  const email = v('new-user-email'), pass = v('new-user-pass');
+  const email = v('new-user-email').toLowerCase();
   clearAlert('user-create-alert');
-  if (!email || !pass)  return showAlert('user-create-alert','error','❌ Completá todos los campos');
-  if (pass.length < 6)  return showAlert('user-create-alert','error','❌ La contraseña debe tener al menos 6 caracteres');
+  if (!email)                return showAlert('user-create-alert','error','❌ Escribí el email del usuario');
+  if (!EMAIL_RE.test(email)) return showAlert('user-create-alert','error','❌ El email no es válido');
+  const btn = el('user-create-btn'); if (btn) btn.disabled = true;
   try {
-    await provisionUser(email, pass);
-    showAlert('user-create-alert','success',`✅ Usuario "${email}" creado correctamente`);
+    const r = await callFn('crearUsuario', { email });
+    if (r.estado === 'ya_existia') {
+      showAlert('user-create-alert', 'error',
+        `<span>⚠️ Ya existía una cuenta con <strong>${esc(r.email)}</strong>: no se creó otra ni se cambió su contraseña.` +
+        `${r.fichaRecreada ? ' Se le devolvió el acceso al portal.' : ''}</span>` +
+        `<button class="btn btn-outline btn-sm" style="margin-left:auto" onclick="reenviarAccesoUsuario('${esc(r.uid)}','${esc(r.email)}')">📨 Reenviar acceso</button>`);
+    } else if (r.correo && r.correo.enviado) {
+      showAlert('user-create-alert', 'success',
+        `✅ Usuario "${esc(r.email)}" creado. Le enviamos un correo con el enlace para crear su contraseña.`);
+    } else {
+      showAlert('user-create-alert', 'error',
+        `⚠️ Usuario "${esc(r.email)}" creado, pero el correo no salió: ${esc((r.correo && r.correo.detalle) || 'motivo desconocido')}`);
+      if (r.enlace) showAccessLinksModal([{ email: r.email, enlace: r.enlace, motivo: r.correo && r.correo.detalle }]);
+    }
     el('new-user-email').value = '';
-    el('new-user-pass').value  = '';
     await loadUsers(); renderUsersTable(); populatePermSelect();
   } catch (err) {
-    const msg = String(err.message || err).includes('EMAIL_EXISTS') ? 'Ya existe un usuario con ese email' : 'Error al crear el usuario';
-    showAlert('user-create-alert','error','❌ ' + msg);
+    showAlert('user-create-alert', 'error', '❌ No se pudo crear el usuario: ' + esc(fnErrorMsg(err)));
+  } finally {
+    if (btn) btn.disabled = false;
   }
+}
+
+// Modal "mostrar una vez": enlaces de acceso de altas/reenvíos cuyo correo no
+// salió. El enlace no queda guardado en ningún lado: al cerrar, desaparece.
+function showAccessLinksModal(items) {
+  closeAccessLinksModal();
+  const m = document.createElement('div');
+  m.className = 'modal-backdrop'; m.id = 'access-links-modal';
+  m.innerHTML = `<div class="modal-box">
+    <div class="modal-head">
+      <span class="modal-title">🔗 Enlace${items.length > 1 ? 's' : ''} de acceso (se muestra${items.length > 1 ? 'n' : ''} una sola vez)</span>
+      <button class="btn btn-outline btn-sm" onclick="closeAccessLinksModal()">✕ Cerrar</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:.82rem;color:var(--gray);font-weight:500;margin:0 0 .9rem;line-height:1.5">
+        El correo no salió. Pasale el enlace al usuario por un canal privado (no lo publiques).
+        <strong>No queda guardado</strong>: copialo antes de cerrar. Sirve una sola vez y vence
+        a la hora; si vence, usá <strong>📨 Reenviar acceso</strong> en la tabla de usuarios.
+      </p>
+      ${items.map((it, i) => `
+      <div style="margin-bottom:1rem">
+        <label>${esc(it.email)}</label>
+        <div class="alert alert-error" style="margin:.3rem 0 .45rem">⚠️ ${esc(it.motivo || 'El correo no salió.')}</div>
+        <div style="display:flex;gap:.5rem">
+          <input type="text" id="access-link-${i}" readonly value="${esc(it.enlace)}" onclick="this.select()" style="font-size:.75rem" />
+          <button class="btn btn-orange btn-sm" style="flex:0 0 auto" onclick="copyAccessLink(${i}, this)">📋 Copiar</button>
+        </div>
+      </div>`).join('')}
+    </div>
+  </div>`;
+  document.body.appendChild(m);
+}
+function closeAccessLinksModal() { const m = el('access-links-modal'); if (m) m.remove(); }
+async function copyAccessLink(i, btn) {
+  const inp = el('access-link-' + i); if (!inp) return;
+  try { await navigator.clipboard.writeText(inp.value); }
+  catch { inp.select(); try { document.execCommand('copy'); } catch {} }
+  if (btn) { btn.textContent = '✅ Copiado'; setTimeout(() => { btn.textContent = '📋 Copiar'; }, 2000); }
 }
 
 // Carga SheetJS bajo demanda (solo cuando el admin importa un archivo).
@@ -2845,6 +3006,7 @@ async function importUsers() {
   btn.disabled = true;
   prog.classList.remove('hidden');
   prog.innerHTML = '<div class="loading">Leyendo archivo...</div>';
+  const finish = () => { btn.disabled = false; prog.classList.add('hidden'); };
 
   // 1) Leer y parsear el archivo → array de filas
   let rows;
@@ -2855,71 +3017,108 @@ async function importUsers() {
     const ws = wb.Sheets[wb.SheetNames[0]];
     rows = XLSX.utils.sheet_to_json(ws, { header: 1, blankrows: false, defval: '' });
   } catch (e) {
-    btn.disabled = false; prog.classList.add('hidden');
-    return showAlert('user-import-alert','error','❌ ' + (e.message || 'No se pudo leer el archivo'));
+    finish();
+    return showAlert('user-import-alert','error','❌ ' + esc(e.message || 'No se pudo leer el archivo'));
   }
 
-  // 2) Extraer pares email / contraseña (col 1 y col 2), omitiendo encabezado
-  const pairs = [];
+  // 2) Extraer los emails (1ª columna), omitiendo encabezado y repetidos. Si la
+  //    2ª columna trae algo (planillas viejas con contraseña), se ignora y se avisa.
+  const emails = [], seen = new Set();
+  let passwordsIgnored = false;
   (rows || []).forEach(r => {
     if (!r || !r.length) return;
-    const email = String(r[0] ?? '').trim();
-    const pass  = String(r[1] ?? '').trim();
+    const email = String(r[0] ?? '').trim().toLowerCase();
     if (!email) return;
     if (/^(e-?mail|correo)/i.test(email)) return;   // fila de encabezado
-    pairs.push({ email, pass });
+    if (String(r[1] ?? '').trim()) passwordsIgnored = true;
+    if (seen.has(email)) return;
+    seen.add(email); emails.push(email);
   });
 
-  if (!pairs.length) {
-    btn.disabled = false; prog.classList.add('hidden');
-    return showAlert('user-import-alert','error','❌ No se encontraron datos. Verificá que el email esté en la 1ª columna y la contraseña en la 2ª.');
+  if (!emails.length) {
+    finish();
+    return showAlert('user-import-alert','error','❌ No se encontraron datos. Verificá que el email esté en la 1ª columna.');
   }
 
-  // 3) Crear cada usuario, de a uno, con reporte de resultados
-  const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  const ok = [], exists = [], invalid = [], errored = [];
-  for (let i = 0; i < pairs.length; i++) {
-    const { email, pass } = pairs[i];
-    prog.innerHTML = `<div class="loading">Procesando ${i + 1} de ${pairs.length}: ${esc(email)}...</div>`;
-    if (!emailRe.test(email))     { invalid.push(`${email} — email inválido`); continue; }
-    if (pass.length < 6)          { invalid.push(`${email} — contraseña de menos de 6 caracteres`); continue; }
+  const invalid = emails.filter(e => !EMAIL_RE.test(e)).map(e => `${e} — email inválido`);
+  const valid = emails.filter(e => EMAIL_RE.test(e));
+
+  // 3) Cupo diario de correos (Workspace: 2.000/día por cuenta, compartida con
+  //    paneles). Si la importación no entra, se rechaza ANTES de crear nada.
+  if (valid.length) {
+    prog.innerHTML = '<div class="loading">Verificando el cupo diario de correos...</div>';
     try {
-      await provisionUser(email, pass);
-      ok.push(email);
+      const info = await callFn('infoCorreo');
+      if (info.disponible != null && valid.length > info.disponible) {
+        finish();
+        return showAlert('user-import-alert', 'error',
+          `❌ La importación tiene ${valid.length} usuarios y hoy quedan <strong>${info.disponible}</strong> correos disponibles ` +
+          `(cupo diario de este portal: ${info.cupoDiario}; enviados en las últimas 24 h: ${info.enviados24h}). ` +
+          `Dividí el archivo o esperá a mañana. No se creó ningún usuario.`);
+      }
     } catch (err) {
-      const m = String(err.message || err);
-      if (m.includes('EMAIL_EXISTS'))        exists.push(email);
-      else if (m.includes('INVALID_EMAIL'))  invalid.push(`${email} — email inválido`);
-      else if (m.includes('WEAK_PASSWORD'))  invalid.push(`${email} — contraseña débil`);
-      else                                   errored.push(`${email} — ${m}`);
+      finish();
+      return showAlert('user-import-alert','error','❌ No se pudo verificar el cupo de correos: ' + esc(fnErrorMsg(err)));
+    }
+  }
+
+  // 4) Crear cada usuario, de a uno, con reporte de resultados
+  const ok = [], noMail = [], exists = [], errored = [], links = [];
+  for (let i = 0; i < valid.length; i++) {
+    const email = valid[i];
+    prog.innerHTML = `<div class="loading">Procesando ${i + 1} de ${valid.length}: ${esc(email)}...</div>`;
+    try {
+      const r = await callFn('crearUsuario', { email });
+      if (r.estado === 'ya_existia') exists.push(email);
+      else if (r.correo && r.correo.enviado) ok.push(email);
+      else {
+        const motivo = (r.correo && r.correo.detalle) || 'motivo desconocido';
+        noMail.push(`${email} — ${motivo}`);
+        if (r.enlace) links.push({ email, enlace: r.enlace, motivo });
+      }
+    } catch (err) {
+      const code = String((err && err.code) || '').replace('functions/', '');
+      if (code === 'invalid-argument') invalid.push(`${email} — ${fnErrorMsg(err)}`);
+      else errored.push(`${email} — ${fnErrorMsg(err)}`);
+      if (code === 'permission-denied' || code === 'unauthenticated') break;
     }
   }
 
   await loadUsers(); renderUsersTable(); populatePermSelect();
   fileInput.value = '';
-  prog.classList.add('hidden');
-  btn.disabled = false;
+  finish();
 
-  // 4) Resumen
-  let html = `<strong>Importación finalizada.</strong><br>✅ Creados: ${ok.length} de ${pairs.length}`;
+  // 5) Resumen
+  let html = `<span><strong>Importación finalizada.</strong>`;
+  html += `<br>✅ Creados y notificados (${ok.length})${ok.length ? ': ' + esc(ok.join(', ')) : ''}`;
+  if (noMail.length)  html += `<br>✉️ Creados sin correo (${noMail.length}): ${esc(noMail.join(' · '))}`;
   if (exists.length)  html += `<br>⏭ Ya existían (${exists.length}): ${esc(exists.join(', '))}`;
-  if (invalid.length) html += `<br>⚠ Omitidos (${invalid.length}): ${esc(invalid.join(', '))}`;
-  if (errored.length) html += `<br>❌ Errores (${errored.length}): ${esc(errored.join(', '))}`;
-  showAlert('user-import-alert', ok.length ? 'success' : 'error', html);
+  if (invalid.length) html += `<br>⚠ Inválidos (${invalid.length}): ${esc(invalid.join(', '))}`;
+  if (errored.length) html += `<br>❌ Errores (${errored.length}): ${esc(errored.join(' · '))}`;
+  if (passwordsIgnored) html += `<br>ℹ️ El archivo traía contraseñas en la 2ª columna: se ignoraron (cada usuario crea la suya desde el correo).`;
+  html += `</span>`;
+  showAlert('user-import-alert', (ok.length || noMail.length) ? 'success' : 'error', html);
+  if (links.length) showAccessLinksModal(links);
 }
 
-async function resetUserPassword(email) {
-  if (!confirm(`¿Enviar un correo para restablecer la contraseña de "${email}"?\n\nEl usuario recibirá un enlace por email para elegir una contraseña nueva.`)) return;
+// "Reenviar acceso": la Cloud Function reenviarAcceso genera un enlace nuevo y
+// lo manda desde notificaciones@ (plantilla "Bienvenida" si el usuario nunca
+// ingresó; "Restablecer" si ya ingresó alguna vez). Queda registrado quién lo
+// pidió y cuándo (users/{uid}.ultimoReenvio y el registro de envíos).
+async function reenviarAccesoUsuario(uid, email) {
+  if (!confirm(`¿Reenviar el acceso a "${email}"?\n\nSe genera un enlace nuevo para que elija su contraseña y se le manda por correo desde notificaciones@equipos.com.uy.`)) return;
   try {
-    await auth.sendPasswordResetEmail(email);
-    alert(`✅ Se envió a "${email}" un correo con el enlace para restablecer su contraseña.\n\nRevisá también la carpeta de spam si no llega en unos minutos.`);
+    const r = await callFn('reenviarAcceso', { uid });
+    if (r.correo && r.correo.enviado) {
+      alert(`✅ Se envió a "${r.email}" un correo ${r.plantilla === 'bienvenida' ? 'de bienvenida' : 'para restablecer la contraseña'} con un enlace nuevo.\n\nSi no le llega en unos minutos, que revise la carpeta de spam.`);
+    } else if (r.enlace) {
+      showAccessLinksModal([{ email: r.email, enlace: r.enlace, motivo: r.correo && r.correo.detalle }]);
+    } else {
+      alert('❌ No se pudo reenviar el acceso: ' + ((r.correo && r.correo.detalle) || 'motivo desconocido'));
+    }
+    await loadUsers(); renderUsersTable();
   } catch (err) {
-    const code = (err && err.code) || '';
-    let msg = err.message || err;
-    if (code === 'auth/user-not-found')  msg = 'No existe una cuenta de autenticación con ese email.';
-    if (code === 'auth/invalid-email')   msg = 'El email no es válido.';
-    if (code === 'auth/too-many-requests') msg = 'Demasiados intentos. Esperá unos minutos e intentá de nuevo.';
-    alert('❌ No se pudo enviar el correo de restablecimiento: ' + msg);
+    alert('❌ No se pudo reenviar el acceso: ' + fnErrorMsg(err));
   }
 }
 
@@ -2983,6 +3182,7 @@ async function loadUserPermissions() {
       Marcá los informes a los que puede acceder este usuario y configurá las protecciones de cada uno.<br>
       Los cambios se guardan automáticamente.
     </p>
+    ${notifyCheckboxHTML('perm-notify')}
     <div class="perm-grid">
       ${allReports.map(r => {
         const on = granted.includes(r.id);
@@ -3017,10 +3217,24 @@ async function loadUserPermissions() {
     </div>`;
 }
 
+// Casilla "Avisar al usuario por correo" (marcada por defecto) de la pestaña
+// Permisos y del modal "Usuarios" de cada informe. Si se desmarca, habilitar un
+// informe no genera correo (útil para preparar accesos antes de publicar).
+function notifyCheckboxHTML(id) {
+  return `<label class="notify-toggle" title="Al habilitar un informe, el usuario recibe un aviso por correo desde notificaciones@equipos.com.uy">
+      <input type="checkbox" id="${id}" checked />
+      <span>📧 Avisar al usuario por correo al habilitar un informe</span>
+    </label>`;
+}
+function notifyChecked(id) { const c = el(id); return !c || c.checked; }
+
 // Da o quita el acceso de un usuario a un informe (colección userAccess).
 // Al conceder, inicializa las protecciones por defecto. Usado tanto por la
 // pestaña Permisos (por usuario) como por el diálogo "Usuarios" (por informe).
-async function grantReportToUser(userId, reportId, grant) {
+// `notificar` (por defecto true) queda en options[reportId].notificar en el
+// mismo set: la Cloud Function notificarAcceso lo lee para decidir si le manda
+// al usuario el aviso "Nuevo informe" por correo.
+async function grantReportToUser(userId, reportId, grant, notificar = true) {
   const snap = await db.collection('userAccess').doc(userId).get();
   const data = snap.exists ? snap.data() : {};
   let ids = data.reportIds || [];
@@ -3035,6 +3249,7 @@ async function grantReportToUser(userId, reportId, grant) {
     options[reportId].grantedByEmail = (currentUser && currentUser.email) ||
                                        (currentUserData && currentUserData.email) || null;
     options[reportId].grantedAt      = new Date().toISOString();
+    options[reportId].notificar      = notificar !== false;
   } else {
     ids = ids.filter(x => x !== reportId);
   }
@@ -3044,7 +3259,7 @@ async function grantReportToUser(userId, reportId, grant) {
 
 async function togglePerm(userId, reportId, cb) {
   const on = cb.checked;
-  const options = await grantReportToUser(userId, reportId, on);
+  const options = await grantReportToUser(userId, reportId, on, notifyChecked('perm-notify'));
   // Mantener el badge de "usuarios con acceso" de la lista de informes.
   reportAccessCounts[reportId] = Math.max(0, (reportAccessCounts[reportId] || 0) + (on ? 1 : -1));
   // Reflejar en la UI: activar/desactivar los toggles de protección
@@ -4098,6 +4313,330 @@ function renderDashboardAnalytics() {
         <tbody>${rowsHtml}</tbody></table></div>
     </div>`;
   }).join('');
+}
+
+/* ── CONFIGURACIÓN → CORREOS ──
+   Plantillas editables de los correos que manda el portal (Bienvenida,
+   Restablecer, Nuevo informe), remitente / Reply-To, ventana de agrupado de
+   avisos y registro de envíos (mailLog). Los textos por defecto, las variables
+   y las reglas de cada plantilla vienen del backend (infoCorreo), que es el que
+   arma los correos: así front y back no se desincronizan. Lo editado se guarda
+   en config/correos y se aplica al siguiente envío, sin deploy. */
+let _mailInfo = null;   // respuesta de infoCorreo: { catalogo, enviados24h, cupoDiario, disponible, … }
+let _mailCfg  = {};     // doc config/correos
+let _tplFocus = {};     // { clave: id del último campo (asunto/cuerpo) con foco }
+
+async function loadMailConfig() {
+  const gen = el('cfg-mail-general'), tpl = el('cfg-mail-templates');
+  try {
+    const [info, snap] = await Promise.all([
+      callFn('infoCorreo'),
+      db.collection('config').doc('correos').get(),
+    ]);
+    _mailInfo = info;
+    _mailCfg = snap.exists ? (snap.data() || {}) : {};
+    renderMailGeneral();
+    renderMailTemplates();
+  } catch (e) {
+    const msg = emptyHTML('⚠️', 'No se pudo cargar la configuración de correos: ' + esc(fnErrorMsg(e)));
+    if (gen) gen.innerHTML = msg;
+    if (tpl) tpl.innerHTML = '';
+  }
+  loadMailLog();
+}
+
+function renderMailGeneral() {
+  const box = el('cfg-mail-general'); if (!box || !_mailInfo) return;
+  const c = _mailCfg || {};
+  const ventana = (c.ventanaAgrupadoMin === undefined || c.ventanaAgrupadoMin === null) ? 2 : c.ventanaAgrupadoMin;
+  box.innerHTML = `
+    <div id="cfg-mail-general-alert"></div>
+    <p style="font-size:.8rem;color:var(--gray);font-weight:500;margin:0 0 1rem;line-height:1.5">
+      Los correos salen desde <strong>${esc(_mailInfo.cuenta || 'notificaciones@equipos.com.uy')}</strong>
+      (Google Workspace). ${_mailInfo.smtpConfigurado ? '✅ Credencial SMTP configurada.' : '⚠️ <strong>Falta la credencial SMTP</strong> (SMTP_PASSWORD en Secret Manager): los correos van a fallar y el enlace se mostrará en pantalla.'}
+    </p>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:1rem;align-items:end">
+      <div class="form-group" style="margin:0">
+        <label>Nombre visible del remitente</label>
+        <input type="text" id="cfg-remitente" maxlength="80" placeholder="Equipos Consultores" value="${esc(c.remitenteNombre || '')}" />
+      </div>
+      <div class="form-group" style="margin:0">
+        <label>Responder a (Reply-To, opcional)</label>
+        <input type="email" id="cfg-replyto" placeholder="equipo@equipos.com.uy" value="${esc(c.replyTo || '')}" />
+      </div>
+      <div class="form-group" style="margin:0">
+        <label>Agrupar avisos (minutos)</label>
+        <input type="number" class="fnumber" id="cfg-ventana" min="0" max="60" step="1" value="${esc(ventana)}" />
+      </div>
+    </div>
+    <p style="font-size:.74rem;color:var(--gray);font-weight:500;margin:.7rem 0 0;line-height:1.5">
+      💡 <strong>Agrupar avisos:</strong> si a un usuario se le habilitan varios informes seguidos, le llega
+      un solo correo con la lista cuando pasan estos minutos sin nuevos cambios (0 = mandar cada aviso en el momento).
+    </p>
+    <div class="tpl-actions"><button class="btn btn-orange btn-sm" onclick="saveMailGeneral()">💾 Guardar</button></div>`;
+}
+
+async function saveMailGeneral() {
+  clearAlert('cfg-mail-general-alert');
+  const nombre = v('cfg-remitente');
+  const replyTo = v('cfg-replyto');
+  const ventana = Number(v('cfg-ventana'));
+  if (replyTo && !EMAIL_RE.test(replyTo))
+    return showAlert('cfg-mail-general-alert', 'error', '❌ El Reply-To no es un email válido.');
+  if (!Number.isInteger(ventana) || ventana < 0 || ventana > 60)
+    return showAlert('cfg-mail-general-alert', 'error', '❌ La ventana de agrupado tiene que ser un número entero entre 0 y 60.');
+  try {
+    const datos = { remitenteNombre: nombre, replyTo, ventanaAgrupadoMin: ventana, ...mailAudit() };
+    await db.collection('config').doc('correos').set(datos, { merge: true });
+    Object.assign(_mailCfg, { remitenteNombre: nombre, replyTo, ventanaAgrupadoMin: ventana });
+    showAlert('cfg-mail-general-alert', 'success', '✅ Guardado. Se aplica al próximo correo.');
+  } catch (e) {
+    showAlert('cfg-mail-general-alert', 'error', '❌ No se pudo guardar: ' + esc(e.message || e));
+  }
+}
+
+function mailAudit() {
+  return {
+    actualizadoPor: (currentUser && currentUser.email) || null,
+    actualizadoEn: firebase.firestore.FieldValue.serverTimestamp(),
+  };
+}
+
+// Plantilla en uso: la editada en config/correos o, si no, la del código.
+function tplEffective(k) {
+  const def = _mailInfo.catalogo.porDefecto[k];
+  const ed = ((_mailCfg.plantillas || {})[k]) || {};
+  return {
+    asunto: ed.asunto || def.asunto,
+    cuerpo: ed.cuerpo || def.cuerpo,
+    activo: (ed.activo === undefined || ed.activo === null) ? def.activo : !!ed.activo,
+    editada: !!(ed.asunto || ed.cuerpo),
+  };
+}
+
+function renderMailTemplates() {
+  const box = el('cfg-mail-templates'); if (!box || !_mailInfo) return;
+  const cat = _mailInfo.catalogo;
+  box.innerHTML = `
+    <p style="font-size:.8rem;color:var(--gray);font-weight:500;margin:0 0 1rem;line-height:1.5">
+      Texto plano. Las variables <code>{{así}}</code> se reemplazan al enviar (tocá una para insertarla).
+      Si una línea tiene variables y todas quedan vacías (por ejemplo <code>Carpeta: {{carpeta}}</code> en un
+      informe sin carpeta), la línea se omite. Al pie se agrega siempre la firma del portal.
+    </p>` + cat.claves.map(k => {
+    const t = tplEffective(k);
+    const vars = cat.variables[k] || [];
+    const sw = (cat.conInterruptor || []).includes(k) ? `
+        <label class="notify-toggle" style="margin:0 0 0 auto">
+          <input type="checkbox" id="tpl-${k}-activo" ${t.activo ? 'checked' : ''} onchange="toggleTemplateActive('${k}', this)" />
+          <span>Enviar este correo</span>
+        </label>` : '';
+    return `
+    <div class="tpl-box" id="tpl-${k}">
+      <div class="tpl-head">
+        <span class="tpl-title">${esc(cat.nombres[k] || k)}</span>
+        <span class="badge ${t.editada ? 'badge-admin' : 'badge-user'}" id="tpl-${k}-badge">${t.editada ? 'Editada' : 'Texto por defecto'}</span>
+        ${sw}
+      </div>
+      <div id="tpl-${k}-alert"></div>
+      <div class="form-group" style="margin-bottom:.8rem">
+        <label>Asunto</label>
+        <input type="text" id="tpl-${k}-asunto" maxlength="200" value="${esc(t.asunto)}"
+               onfocus="_tplFocus['${k}']=this.id" oninput="onTemplateInput('${k}')" />
+      </div>
+      <div class="form-group" style="margin-bottom:.4rem">
+        <label>Cuerpo</label>
+        <textarea class="ftextarea" id="tpl-${k}-cuerpo" rows="12"
+                  onfocus="_tplFocus['${k}']=this.id" oninput="onTemplateInput('${k}')">${esc(t.cuerpo)}</textarea>
+      </div>
+      <div style="font-size:.72rem;color:var(--gray);font-weight:600">Variables disponibles${(cat.obligatorias[k] || []).length ? ' (obligatoria: ' + cat.obligatorias[k].map(x => '{{' + x + '}}').join(', ') + ')' : ''}:</div>
+      <div class="tpl-vars">${vars.map(x => `<button type="button" class="var-chip" title="${esc(cat.descripcionVariables[x] || '')}" onclick="insertTemplateVar('${k}','${x}')">{{${x}}}</button>`).join('')}</div>
+      <div class="tpl-errors" id="tpl-${k}-errors"></div>
+      <pre class="tpl-preview hidden" id="tpl-${k}-preview"></pre>
+      <div class="tpl-actions">
+        <button class="btn btn-orange btn-sm" id="tpl-${k}-save" onclick="saveTemplate('${k}')">💾 Guardar</button>
+        <button class="btn btn-outline btn-sm" onclick="toggleTemplatePreview('${k}')">👁 Vista previa</button>
+        <button class="btn btn-outline btn-sm" onclick="sendTestTemplate('${k}', this)">✉️ Enviarme una prueba</button>
+        <button class="btn btn-outline btn-sm" onclick="restoreTemplate('${k}')" ${t.editada ? '' : 'disabled'} id="tpl-${k}-restore">↺ Restaurar texto por defecto</button>
+      </div>
+    </div>`;
+  }).join('');
+  cat.claves.forEach(k => onTemplateInput(k));
+}
+
+const TPL_VAR_RE = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g;
+function tplVarsUsed(text) { return [...String(text || '').matchAll(TPL_VAR_RE)].map(m => m[1]); }
+
+// Misma validación que el backend (functions/portal/plantillas.py → validar).
+function validateTemplate(k, asunto, cuerpo) {
+  const cat = _mailInfo.catalogo, errs = [];
+  if (!asunto.trim()) errs.push('El asunto no puede quedar vacío.');
+  if (!cuerpo.trim()) errs.push('El cuerpo no puede quedar vacío.');
+  if (asunto.length > 200) errs.push('El asunto supera los 200 caracteres.');
+  if (cuerpo.length > 10000) errs.push('El cuerpo supera los 10000 caracteres.');
+  const allowed = new Set(cat.variables[k] || []);
+  const unknown = [...new Set(tplVarsUsed(asunto + '\n' + cuerpo).filter(x => !allowed.has(x)))].sort();
+  if (unknown.length) errs.push('Variables desconocidas para esta plantilla: ' + unknown.map(x => '{{' + x + '}}').join(', ') + '.');
+  (cat.obligatorias[k] || []).forEach(x => {
+    if (!tplVarsUsed(cuerpo).includes(x)) errs.push(`El cuerpo tiene que incluir {{${x}}}.`);
+  });
+  return errs;
+}
+
+// Vista previa con datos de ejemplo (mismo armado que el backend).
+function renderTemplatePreview(k, asunto, cuerpo) {
+  const cat = _mailInfo.catalogo;
+  const allowed = new Set(cat.variables[k] || []);
+  const vals = Object.assign({}, cat.ejemplo, { url_portal: _mailInfo.urlPortal || location.origin });
+  const fill = (text) => String(text || '').split('\n').map(line => {
+    const found = [...line.matchAll(TPL_VAR_RE)];
+    if (!found.length) return line;
+    const val = name => allowed.has(name) ? String(vals[name] || '') : '';
+    if (found.every(m => !val(m[1]))) return null;
+    return line.replace(TPL_VAR_RE, (_, name) => val(name));
+  }).filter(l => l !== null).join('\n');
+  const subj = fill(asunto).replace(/\s+/g, ' ').trim();
+  return `Asunto: ${subj}\n${'─'.repeat(40)}\n${fill(cuerpo).replace(/\s+$/, '')}${cat.firma}`;
+}
+
+function onTemplateInput(k) {
+  const asunto = el(`tpl-${k}-asunto`).value, cuerpo = el(`tpl-${k}-cuerpo`).value;
+  const errs = validateTemplate(k, asunto, cuerpo);
+  el(`tpl-${k}-errors`).innerHTML = errs.map(e => '❌ ' + esc(e)).join('<br>');
+  el(`tpl-${k}-save`).disabled = errs.length > 0;
+  const pv = el(`tpl-${k}-preview`);
+  if (pv && !pv.classList.contains('hidden')) pv.textContent = renderTemplatePreview(k, asunto, cuerpo);
+}
+
+function toggleTemplatePreview(k) {
+  const pv = el(`tpl-${k}-preview`); if (!pv) return;
+  pv.classList.toggle('hidden');
+  onTemplateInput(k);
+}
+
+function insertTemplateVar(k, name) {
+  const target = el(_tplFocus[k] || `tpl-${k}-cuerpo`); if (!target) return;
+  const tok = `{{${name}}}`;
+  const a = target.selectionStart ?? target.value.length, b = target.selectionEnd ?? target.value.length;
+  target.value = target.value.slice(0, a) + tok + target.value.slice(b);
+  target.focus();
+  target.selectionStart = target.selectionEnd = a + tok.length;
+  onTemplateInput(k);
+}
+
+async function saveTemplate(k) {
+  clearAlert(`tpl-${k}-alert`);
+  const asunto = el(`tpl-${k}-asunto`).value, cuerpo = el(`tpl-${k}-cuerpo`).value;
+  const errs = validateTemplate(k, asunto, cuerpo);
+  if (errs.length) return showAlert(`tpl-${k}-alert`, 'error', '❌ ' + esc(errs.join(' ')));
+  try {
+    await db.collection('config').doc('correos').set({ plantillas: { [k]: { asunto, cuerpo } }, ...mailAudit() }, { merge: true });
+    _mailCfg.plantillas = _mailCfg.plantillas || {};
+    _mailCfg.plantillas[k] = Object.assign({}, _mailCfg.plantillas[k], { asunto, cuerpo });
+    el(`tpl-${k}-badge`).textContent = 'Editada'; el(`tpl-${k}-badge`).className = 'badge badge-admin';
+    el(`tpl-${k}-restore`).disabled = false;
+    showAlert(`tpl-${k}-alert`, 'success', '✅ Plantilla guardada. Se usa desde el próximo envío.');
+  } catch (e) {
+    showAlert(`tpl-${k}-alert`, 'error', '❌ No se pudo guardar: ' + esc(e.message || e));
+  }
+}
+
+async function restoreTemplate(k) {
+  if (!confirm('¿Volver al texto por defecto de esta plantilla? Se pierde el texto editado.')) return;
+  try {
+    const del = firebase.firestore.FieldValue.delete();
+    await db.collection('config').doc('correos').set({ plantillas: { [k]: { asunto: del, cuerpo: del } }, ...mailAudit() }, { merge: true });
+    if (_mailCfg.plantillas && _mailCfg.plantillas[k]) { delete _mailCfg.plantillas[k].asunto; delete _mailCfg.plantillas[k].cuerpo; }
+    renderMailTemplates();
+    showAlert(`tpl-${k}-alert`, 'success', '✅ Se restauró el texto por defecto.');
+  } catch (e) {
+    showAlert(`tpl-${k}-alert`, 'error', '❌ No se pudo restaurar: ' + esc(e.message || e));
+  }
+}
+
+async function toggleTemplateActive(k, cb) {
+  const activo = cb.checked;
+  if (!activo && !confirm('¿Dejar de enviar este correo? Mientras esté apagado, los envíos de esta plantilla se omiten (quedan registrados como "omitido").')) {
+    cb.checked = true; return;
+  }
+  try {
+    await db.collection('config').doc('correos').set({ plantillas: { [k]: { activo } }, ...mailAudit() }, { merge: true });
+    _mailCfg.plantillas = _mailCfg.plantillas || {};
+    _mailCfg.plantillas[k] = Object.assign({}, _mailCfg.plantillas[k], { activo });
+    showAlert(`tpl-${k}-alert`, 'success', activo ? '✅ Este correo se vuelve a enviar.' : '⏸ Este correo quedó apagado.');
+  } catch (e) {
+    cb.checked = !activo;
+    showAlert(`tpl-${k}-alert`, 'error', '❌ No se pudo guardar: ' + esc(e.message || e));
+  }
+}
+
+// Manda la plantilla TAL COMO ESTÁ EN PANTALLA (aunque no esté guardada) al
+// admin logueado, con datos de ejemplo y "[PRUEBA]" en el asunto.
+async function sendTestTemplate(k, btn) {
+  clearAlert(`tpl-${k}-alert`);
+  const asunto = el(`tpl-${k}-asunto`).value, cuerpo = el(`tpl-${k}-cuerpo`).value;
+  const errs = validateTemplate(k, asunto, cuerpo);
+  if (errs.length) return showAlert(`tpl-${k}-alert`, 'error', '❌ ' + esc(errs.join(' ')));
+  if (btn) btn.disabled = true;
+  try {
+    const r = await callFn('enviarPrueba', {
+      plantilla: k, asunto, cuerpo,
+      remitenteNombre: el('cfg-remitente') ? v('cfg-remitente') : undefined,
+      replyTo: el('cfg-replyto') ? v('cfg-replyto') : undefined,
+    });
+    if (r.correo && r.correo.enviado) showAlert(`tpl-${k}-alert`, 'success', `✅ Te mandamos la prueba a <strong>${esc(r.destinatario)}</strong>. Revisá también la carpeta de spam.`);
+    else showAlert(`tpl-${k}-alert`, 'error', '❌ La prueba no salió: ' + esc((r.correo && r.correo.detalle) || 'motivo desconocido'));
+    loadMailLog();
+  } catch (e) {
+    showAlert(`tpl-${k}-alert`, 'error', '❌ No se pudo enviar la prueba: ' + esc(fnErrorMsg(e)));
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// Refresca solo el registro y el contador de 24 h (sin re-renderizar las
+// plantillas, para no perder lo que se esté editando).
+async function refreshMailLog() {
+  try { _mailInfo = await callFn('infoCorreo'); } catch (e) { /* se muestra el registro igual */ }
+  loadMailLog();
+}
+
+// Registro de envíos (mailLog): últimos 100, filtrables por estado, y el
+// contador de las últimas 24 h contra el cupo diario de este portal.
+async function loadMailLog() {
+  const cont = el('maillog-table'); if (!cont) return;
+  const q = el('maillog-quota');
+  if (q && _mailInfo) {
+    q.innerHTML = _mailInfo.enviados24h == null ? '📬 Últimas 24 h: — (no se pudo contar)' :
+      `📬 Últimas 24 h: <strong>${_mailInfo.enviados24h}</strong> enviados · cupo diario de este portal: ${_mailInfo.cupoDiario} · disponibles: <strong>${_mailInfo.disponible}</strong>`;
+  }
+  cont.innerHTML = '<div class="loading">Cargando envíos…</div>';
+  try {
+    const f = el('maillog-filter') ? el('maillog-filter').value : '';
+    const base = db.collection('mailLog');
+    const snap = await (f ? base.where('estado', '==', f).orderBy('creadoEn', 'desc') : base.orderBy('creadoEn', 'desc')).limit(100).get();
+    const rows = snap.docs.map(d => d.data());
+    if (!rows.length) { cont.innerHTML = emptyHTML('📭', 'No hay envíos registrados' + (f ? ' con ese estado' : '') + '.'); return; }
+    const names = (_mailInfo && _mailInfo.catalogo && _mailInfo.catalogo.nombres) || {};
+    const who = (p) => !p ? '—' : p.tipo === 'admin' ? esc(p.email || 'admin') :
+      p.tipo === 'autoservicio' ? 'Autoservicio (login)' : p.tipo === 'asignacion' ? 'Asignación de informe' : esc(p.tipo || '—');
+    cont.innerHTML = `
+      <table>
+        <thead><tr><th>Fecha</th><th>Tipo</th><th>Destinatario</th><th>Estado</th><th>Motivo</th><th>Intentos</th><th>Disparado por</th></tr></thead>
+        <tbody>${rows.map(r => `
+          <tr>
+            <td style="white-space:nowrap;color:var(--gray)">${fmtDateTime(r.creadoEn && r.creadoEn.toMillis ? r.creadoEn.toMillis() : 0)}</td>
+            <td>${esc(names[r.tipo] || r.tipo || '—')}${r.prueba ? ' <span class="badge badge-user">prueba</span>' : ''}${r.reenvio ? ' <span class="badge badge-user">reenvío</span>' : ''}</td>
+            <td style="font-weight:600">${esc(r.destinatario || '—')}</td>
+            <td><span class="mail-state ${esc(r.estado || '')}">${esc(r.estado || '—')}</span></td>
+            <td style="font-size:.78rem;color:var(--gray);max-width:340px">${esc(r.motivo || '')}</td>
+            <td>${r.intentos ?? '—'}</td>
+            <td style="font-size:.78rem">${who(r.disparadoPor)}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>`;
+  } catch (e) {
+    cont.innerHTML = emptyHTML('⚠️', 'No se pudo cargar el registro de envíos: ' + esc(e.message || String(e)));
+  }
 }
 
 /* ── HELPERS ── */

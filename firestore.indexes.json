@@ -1,0 +1,17 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "mailLog",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "estado", "order": "ASCENDING" },
+        { "fieldPath": "creadoEn", "order": "DESCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": [
+    { "collectionGroup": "mailLog", "fieldPath": "expiraEn", "ttl": true, "indexes": [] },
+    { "collectionGroup": "avisosPendientes", "fieldPath": "expiraEn", "ttl": true, "indexes": [] },
+    { "collectionGroup": "limitesCorreo", "fieldPath": "expiraEn", "ttl": true, "indexes": [] }
+  ]
+}

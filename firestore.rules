@@ -15,9 +15,19 @@ service cloud.firestore {
 
     // ── Colección: users ──
     // Cada usuario puede leer su propio doc. El admin puede leer y escribir todos.
+    // Un usuario NO admin solo puede tocar de su propio doc el campo que el
+    // portal escribe por él (mfaEnrolled, al activar el 2FA). Antes podía
+    // escribir el doc completo y, con eso, ponerse role: 'admin' a sí mismo.
+    // El alta (create) la hace el admin o la Cloud Function crearUsuario
+    // (Admin SDK, que no pasa por estas reglas).
     match /users/{uid} {
-      allow read:  if isAuth() && (request.auth.uid == uid || isAdmin());
-      allow write: if isAuth() && (request.auth.uid == uid || isAdmin());
+      allow read:   if isAuth() && (request.auth.uid == uid || isAdmin());
+      allow create: if isAdmin();
+      allow update: if isAdmin() || (
+        isAuth() && request.auth.uid == uid &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['mfaEnrolled'])
+      );
+      allow delete: if isAdmin();
     }
 
     // ── Colección: reports (metadata de los HTMLs) ──
@@ -79,6 +89,30 @@ service cloud.firestore {
       allow create: if isAuth() && request.resource.data.uid == request.auth.uid;
       allow update: if isAuth() && resource.data.uid == request.auth.uid;
       allow read:   if isAdmin();
+    }
+
+    // ── Configuración del portal (config/correos: plantillas de correo,
+    // remitente, Reply-To y ventana de agrupado). Solo admins leen y escriben.
+    match /config/{docId} {
+      allow read, write: if isAdmin();
+    }
+
+    // ── Colección: mailLog (registro de envíos de correo) ──
+    // Guarda direcciones de correo (dato personal): solo la leen los admins.
+    // Solo la escribe el backend (Admin SDK); se purga sola por TTL (expiraEn).
+    match /mailLog/{id} {
+      allow read:  if isAdmin();
+      allow write: if false;
+    }
+
+    // ── Colas internas del backend (avisos agrupados y tope de pedidos de
+    // restablecimiento). Nadie las toca desde el navegador.
+    match /avisosPendientes/{id} {
+      allow read:  if isAdmin();
+      allow write: if false;
+    }
+    match /limitesCorreo/{id} {
+      allow read, write: if false;
     }
 
     // ── Colección: dashboardEvents (analítica de uso dentro de los informes) ──

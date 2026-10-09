@@ -1,7 +1,13 @@
 # 📊 Portal de Informes — Guía de configuración
 
 Sistema para subir informes HTML y controlar qué usuario puede acceder a cuál.
-**100% gratuito** usando Firebase (plan Spark).
+Usa Firebase (Hosting, Auth, Firestore, Storage) y un backend mínimo de **Cloud Functions**
+(alta de usuarios y correos), que requiere el plan **Blaze** (pago por uso; el uso normal queda
+en el tramo gratuito, ver [despliegue](docs/DESPLIEGUE_alta_usuarios_correo.md#15-costos)).
+
+> 📨 **Alta de usuarios con enlace de acceso y avisos por correo:** el despliegue completo
+> (funciones, secreto SMTP, reglas, índices, verificación y rollback) está en
+> [`docs/DESPLIEGUE_alta_usuarios_correo.md`](docs/DESPLIEGUE_alta_usuarios_correo.md).
 
 ---
 
@@ -42,6 +48,9 @@ Sistema para subir informes HTML y controlar qué usuario puede acceder a cuál.
 1. En Firestore → pestaña **Reglas**
 2. Borrá el contenido y pegá todo el contenido del archivo `firestore.rules`
 3. Clic en **Publicar**
+
+> Alternativa recomendada (CLI): `firebase deploy --only firestore:rules,firestore:indexes`
+> publica las reglas y los índices/TTL de `firestore.indexes.json`.
 
 ---
 
@@ -120,7 +129,7 @@ firebase deploy
 2. Iniciá sesión con tu cuenta de **admin**
 3. **Panel Admin:**
    - 📄 **Informes** → subí los archivos HTML
-   - 👥 **Usuarios** → creá cuentas para tus usuarios
+   - 👥 **Usuarios** → creá cuentas con solo el email (el usuario recibe un enlace para crear su contraseña)
    - 🔐 **Permisos** → asigná qué informes puede ver cada usuario
 4. Los usuarios ingresan y ven solo sus informes asignados
 
@@ -130,7 +139,9 @@ firebase deploy
 
 - Los archivos solo son accesibles para usuarios autenticados
 - Las reglas de Firestore y Storage previenen acceso no autorizado
-- La creación de usuarios solo la puede hacer el admin (via REST API)
+- La creación de usuarios solo la puede hacer el admin, a través de la Cloud Function `crearUsuario`
+  (la cuenta se crea con una clave aleatoria que nadie conoce; el usuario fija la suya con un enlace por correo)
+- Un usuario no admin no puede modificar su propio documento en `users` (salvo `mfaEnrolled`)
 - Cada usuario solo ve los informes que vos le asignaste
 
 ---
@@ -153,13 +164,33 @@ Para la mayoría de los casos de uso, el plan gratuito es más que suficiente.
 ## ❓ Preguntas frecuentes
 
 **¿Puedo cambiar la contraseña de un usuario?**
-Sí, desde Firebase Console → Authentication → seleccioná el usuario → Editar.
+No hace falta: desde **Usuarios → 📨 Reenviar acceso** le llega un enlace para elegir una nueva
+(o el usuario la pide con «¿Olvidaste tu contraseña?» en el login).
 
 **¿Puedo eliminar un usuario?**
 Sí, desde Firebase Console → Authentication. El documento en Firestore se puede eliminar manualmente de Firestore → colección `users`.
 
 **¿Los informes HTML pueden tener imágenes/CSS/JS?**
 Sí, siempre que sean recursos inline o URLs absolutas externas. Recursos relativos no van a cargar porque el HTML se sirve desde Firebase Storage.
+
+---
+
+## 📨 Alta de usuarios y correos del portal
+
+- **Alta sin contraseña:** el admin escribe solo el email (o importa un Excel/CSV con una columna de
+  emails). La Cloud Function `crearUsuario` crea la cuenta y le manda al usuario, desde
+  `notificaciones@equipos.com.uy` (Google Workspace), un enlace para crear su contraseña. Si el correo
+  falla, el alta igual queda hecha y el enlace se muestra **una sola vez** para copiarlo.
+- **Reenviar acceso** (tabla de usuarios) y **«¿Olvidaste tu contraseña?»** también salen desde
+  `notificaciones@`.
+- **Aviso «Nuevo informe»:** cuando un usuario gana acceso a un informe, recibe un correo (agrupado si
+  se le habilitan varios seguidos). Se puede habilitar sin avisar con la casilla
+  «📧 Avisar al usuario por correo».
+- **⚙️ Configuración → Correos:** plantillas editables (asunto/cuerpo con variables), remitente,
+  Reply-To, ventana de agrupado, correo de prueba y registro de envíos (`mailLog`, 90 días).
+
+Código en [`functions/`](functions/) (Python 3.11). Despliegue, configuración y pruebas:
+[`docs/DESPLIEGUE_alta_usuarios_correo.md`](docs/DESPLIEGUE_alta_usuarios_correo.md).
 
 ---
 
