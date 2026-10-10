@@ -64,6 +64,13 @@ node_modules/
 
 # dotenv environment variables file
 .env
+# …salvo el de las Cloud Functions: solo tiene configuración NO secreta
+# (la contraseña SMTP vive en Secret Manager).
+!functions/.env
+
+# Entorno virtual de las Cloud Functions
+functions/venv/
+.pytest_cache/
 
 # dataconnect generated files
 .dataconnect
@@ -71,3 +78,6 @@ node_modules/
 # Python cache (scripts/)
 __pycache__/
 *.pyc
+
+# Overrides locales de secretos para el emulador de Functions
+functions/.secret.local

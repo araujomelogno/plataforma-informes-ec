@@ -134,12 +134,14 @@
       <li><a href="#a-permisos">Permisos y protecciones</a></li>
       <li><a href="#a-metricas">Métricas</a></li>
       <li><a href="#a-dinamicos">Informes HTML dinámicos</a></li>
+      <li><a href="#a-correos">Configuración → Correos</a></li>
     </ol>
     <div class="part">Parte 2 · Cliente</div>
     <ol>
-      <li><a href="#c-ingresar">Ingresar y recuperar contraseña</a></li>
+      <li><a href="#c-ingresar">Primer ingreso, ingresar y recuperar contraseña</a></li>
       <li><a href="#c-navegar">Ver mis informes y carpetas</a></li>
       <li><a href="#c-abrir">Abrir un informe</a></li>
+      <li><a href="#c-avisos">Avisos por correo</a></li>
     </ol>
   </nav>
 
@@ -151,16 +153,18 @@
   usuario que tiene rol <b>admin</b>, verás el panel de administración; si no, verás la vista de cliente.</p>
   <figure>
     <img src="manual-img/login.png" alt="Pantalla de ingreso" />
-    <figcaption>Pantalla de ingreso. El enlace «¿Olvidaste tu contraseña?» envía un correo de recuperación.</figcaption>
+    <figcaption>Pantalla de ingreso. El enlace «¿Olvidaste tu contraseña?» envía un correo de recuperación desde <b>notificaciones@equipos.com.uy</b>.</figcaption>
   </figure>
 
   <h3 id="a-panel">2. El panel de administración</h3>
-  <p>El menú lateral tiene cuatro secciones:</p>
+  <p>El menú lateral tiene estas secciones:</p>
   <ul class="dots">
     <li><b>Informes</b> — subir, organizar en carpetas, actualizar y compartir documentos.</li>
     <li><b>Usuarios</b> — crear/importar usuarios y administrar sus accesos.</li>
     <li><b>Permisos</b> — asignar, por usuario, qué informes ve y con qué protecciones.</li>
     <li><b>Métricas</b> — accesos al portal y uso de los dashboards.</li>
+    <li><b>Docs de clientes</b> — documentos que subieron los clientes.</li>
+    <li><b>⚙️ Configuración → Correos</b> — textos de los correos que manda el portal y registro de envíos (ver punto 13).</li>
   </ul>
 
   <h3 id="a-subir">3. Subir un informe</h3>
@@ -201,30 +205,67 @@
   <h3 id="a-usuarios-informe">7. Asignar usuarios a un informe</h3>
   <p>Desde la propia lista de informes, el botón <span class="tag">👥 Usuarios</span> abre un diálogo para elegir
   <b>qué usuarios pueden ver ese informe</b>, con una lista <b>filtrable por email</b>. Los cambios se guardan solos.</p>
+  <p>Arriba de la lista está la casilla <b>«📧 Avisar al usuario por correo al habilitar un informe»</b> (marcada por
+  defecto): cada usuario que marques recibe un aviso con el nombre del informe y el enlace al portal. Desmarcala si
+  estás preparando accesos antes de publicar y no querés que se enteren todavía.</p>
   <figure>
     <img src="manual-img/admin-usuarios-informe.png" alt="Diálogo de usuarios de un informe" />
     <figcaption>Diálogo «Usuarios con acceso»: buscá y marcá los usuarios que pueden ver el informe.</figcaption>
   </figure>
 
   <h3 id="a-usuarios">8. Gestión de usuarios</h3>
-  <p>En <b>Usuarios</b> podés crear cuentas de a una (email + contraseña) o <b>importar desde Excel</b>
-  (columna 1 = email, columna 2 = contraseña). La tabla tiene un <b>buscador por email</b> y, en cada usuario, estas acciones:</p>
+  <h4>Crear un usuario</h4>
+  <p>En <b>Usuarios → Crear nuevo usuario</b> escribís <b>solo el email</b> y tocás <b>＋ Crear</b>. <b>No hay que inventar
+  ni transmitir ninguna contraseña</b>: el portal crea la cuenta y le manda al usuario, desde
+  <b>notificaciones@equipos.com.uy</b>, un correo de bienvenida con un enlace para crear la suya. Nadie del equipo conoce
+  la contraseña del cliente.</p>
+  <ul class="dots">
+    <li>Si el correo salió, vas a ver <b>«✅ Usuario creado. Le enviamos un correo…»</b>.</li>
+    <li>Si el correo <b>no</b> salió (por ejemplo, un problema con la cuenta de correo), el usuario <b>igual queda
+        creado</b> y se abre una ventana con el <b>enlace de acceso</b> y el motivo del fallo. Copialo con
+        <span class="tag">📋 Copiar</span> y pasáselo al usuario por un canal privado.</li>
+    <li>Si el email <b>ya tenía cuenta</b>, no se crea otra ni se cambia su contraseña: el portal te avisa y te ofrece
+        <span class="tag">📨 Reenviar acceso</span>.</li>
+  </ul>
+  <figure>
+    <img src="manual-img/admin-usuarios.png" alt="Sección Usuarios" />
+    <figcaption>Sección «Usuarios»: alta con solo el email, importación desde Excel y tabla con buscador y acciones.</figcaption>
+  </figure>
+  <figure>
+    <img src="manual-img/admin-enlace-acceso.png" alt="Ventana con el enlace de acceso" />
+    <figcaption>Si el correo no sale, el enlace de acceso se muestra <b>una sola vez</b> para copiarlo.</figcaption>
+  </figure>
+  <div class="warn">El enlace de acceso <b>no queda guardado en ningún lado</b>: copialo antes de cerrar la ventana.
+  Sirve <b>una sola vez</b> y <b>vence a la hora</b>. Si vence, usá <b>📨 Reenviar acceso</b> (o el usuario puede pedir otro
+  con «¿Olvidaste tu contraseña?»).</div>
+
+  <h4>Importar usuarios desde Excel</h4>
+  <p>En <b>Importar usuarios desde Excel</b> subís un <b>.xlsx</b>, <b>.xls</b> o <b>.csv</b> con <b>una sola columna: el
+  email</b> (la primera fila puede ser el encabezado). A cada usuario le llega su correo de bienvenida. Si el archivo trae
+  contraseñas en una segunda columna (planillas viejas), <b>se ignoran</b> y el portal te avisa.</p>
+  <p>Al terminar, el resumen separa: <b>creados y notificados</b> · <b>creados sin correo</b> (con el motivo; sus enlaces
+  se muestran una vez para copiarlos) · <b>ya existían</b> · <b>inválidos</b>.</p>
+  <div class="note">La cuenta de correo tiene un <b>tope diario de envíos</b> (compartido con el sistema de paneles). Si la
+  importación tiene más usuarios que los correos disponibles en el día, se rechaza <b>antes de crear a nadie</b>: dividí el
+  archivo o esperá al día siguiente. El contador está en <b>Configuración → Correos</b>.</div>
+
+  <h4>Acciones de cada usuario</h4>
+  <p>La tabla tiene un <b>buscador por email</b> y filtros por dominio y por creador. En cada usuario:</p>
   <ul class="dots">
     <li><b>🔐 Permisos</b> — ir a asignarle informes (ver punto 10).</li>
     <li><b>⚙️ Parámetros</b> — valores por usuario para los informes HTML (ver punto 9).</li>
     <li><b>👁 Accesos</b> — ver qué informes tiene asignados.</li>
-    <li><b>🔑 Restablecer contraseña</b> — le envía un correo (en español) para elegir una nueva.</li>
+    <li><b>📨 Reenviar acceso</b> — genera un enlace nuevo y se lo manda por correo. Si el usuario nunca ingresó recibe
+        el correo de <b>bienvenida</b>; si ya ingresó alguna vez, el de <b>restablecer contraseña</b>. Sirve cuando el
+        usuario perdió el correo o se le venció el enlace, sin tener que borrarlo y crearlo de nuevo. Queda registrado
+        quién lo pidió y cuándo.</li>
     <li><b>⬆ Hacer admin / ⬇ Quitar admin</b> — cambiar el rol.</li>
     <li><b>🗑 Borrar</b> — elimina el usuario y sus permisos del portal.</li>
   </ul>
-  <figure>
-    <img src="manual-img/admin-usuarios.png" alt="Sección Usuarios" />
-    <figcaption>Sección «Usuarios»: creación, importación desde Excel y tabla con buscador y acciones.</figcaption>
-  </figure>
-  <div class="warn"><b>Al borrar un usuario</b> se elimina su registro y sus permisos, pero su credencial (email/contraseña)
-  queda en Firebase Authentication. Para eliminarla por completo — y poder reutilizar ese email — borrala también en
+  <div class="warn"><b>Al borrar un usuario</b> se elimina su registro y sus permisos, pero su credencial queda en
+  Firebase Authentication. Si más adelante lo volvés a crear con el mismo email, el portal le devuelve el acceso y te
+  ofrece <b>📨 Reenviar acceso</b>. Para eliminar la credencial por completo, borrala en
   <b>Firebase Console → Authentication</b>.</div>
-
   <h3 id="a-parametros">9. Parámetros por usuario</h3>
   <p>El botón <span class="tag">⚙️ Parámetros</span> permite definir, por usuario, pares <b>clave/valor</b>
   (por ejemplo <code>clienteId = 777</code>, <code>region = norte</code>, <code>plan = premium</code>). El portal se los
@@ -245,6 +286,19 @@
   </ul>
   <p>Los cambios se guardan automáticamente. (Esto mismo se puede hacer, más rápido para un informe puntual, con el
   botón «Usuarios» del punto 7.)</p>
+  <h4>Aviso por correo al habilitar un informe</h4>
+  <p>Cada vez que le habilitás un informe a un usuario, el portal le manda un correo <b>«Nuevo informe»</b> con el
+  nombre del informe, su carpeta, la fecha de caducidad (si la configuraste) y el enlace al portal.</p>
+  <ul class="dots">
+    <li>La casilla <b>«📧 Avisar al usuario por correo al habilitar un informe»</b> (arriba de la lista, marcada por
+        defecto) permite habilitar <b>sin avisar</b>.</li>
+    <li>Si le habilitás <b>varios informes seguidos</b>, le llega <b>un solo correo con la lista</b> (por defecto se
+        esperan 2 minutos sin cambios; se ajusta en Configuración → Correos). Así también podés cargar la fecha de
+        caducidad antes de que salga el aviso.</li>
+    <li>Si <b>destildás</b> el informe antes de que salga el aviso, no se manda nada.</li>
+    <li><b>No</b> generan correo: quitar un acceso, cambiar una protección o la caducidad, ni volver a marcar un informe
+        que ya tenía. Los administradores no reciben estos avisos.</li>
+  </ul>
   <figure>
     <img src="manual-img/admin-permisos.png" alt="Sección Permisos" />
     <figcaption>Sección «Permisos»: informes asignados a un usuario y las protecciones de cada uno.</figcaption>
@@ -269,13 +323,68 @@
   <p>El detalle técnico, el bloque a pegar en cada HTML y un ejemplo funcional están en el <code>README</code> del
   repositorio y en <code>examples/dashboard-parametros.html</code>.</p>
 
+  <h3 id="a-correos">13. Configuración → Correos</h3>
+  <p>En el menú <b>⚙️ Configuración → Correos</b> se manejan los correos que manda el portal, <b>sin pedirle cambios al
+  desarrollador</b>. Todos salen desde <b>notificaciones@equipos.com.uy</b>.</p>
+  <figure>
+    <img src="manual-img/admin-config-correos.png" alt="Configuración de correos" />
+    <figcaption>Configuración → Correos: remitente, plantillas editables y registro de envíos.</figcaption>
+  </figure>
+  <h4>Remitente y envío</h4>
+  <ul class="dots">
+    <li><b>Nombre visible del remitente</b> — cómo aparece en la bandeja (por defecto «Equipos Consultores»).</li>
+    <li><b>Responder a (Reply-To)</b> — opcional: a dónde llegan las respuestas de los clientes.</li>
+    <li><b>Agrupar avisos (minutos)</b> — cuánto se espera para juntar varios informes habilitados en un solo correo
+        (0 = mandar cada aviso en el momento).</li>
+  </ul>
+  <h4>Plantillas</h4>
+  <p>Hay tres: <b>Bienvenida</b> (alta de usuario), <b>Restablecer contraseña</b> y <b>Nuevo informe</b>. De cada una
+  editás el <b>asunto</b> y el <b>cuerpo</b> (texto plano) y tocás <span class="tag">💾 Guardar</span>: se aplica al
+  siguiente correo. Al pie se agrega siempre la firma del portal.</p>
+  <p>Las <b>variables</b> se reemplazan al enviar; tocá una para insertarla donde está el cursor:</p>
+  <ul class="dots">
+    <li><code>{{email}}</code> — email del destinatario (todas).</li>
+    <li><code>{{enlace}}</code> — enlace para crear la contraseña (Bienvenida y Restablecer; <b>obligatoria</b> en ellas).</li>
+    <li><code>{{url_portal}}</code> — dirección del portal (todas).</li>
+    <li><code>{{admin}}</code> — email del admin que dio el alta o el acceso (Bienvenida y Nuevo informe).</li>
+    <li><code>{{informe}}</code> — nombre del informe; si son varios, la lista (Nuevo informe).</li>
+    <li><code>{{carpeta}}</code> — carpeta del informe, si tiene (Nuevo informe).</li>
+    <li><code>{{vence}}</code> — fecha de caducidad del acceso, si se configuró (Nuevo informe).</li>
+  </ul>
+  <div class="tip">Si una línea tiene variables y todas quedan vacías (por ejemplo <code>Carpeta: {{carpeta}}</code> en un
+  informe sin carpeta), esa línea no aparece en el correo.</div>
+  <ul class="dots">
+    <li>Una variable mal escrita o que no corresponde a esa plantilla se marca en rojo y <b>no deja guardar</b>.</li>
+    <li><span class="tag">👁 Vista previa</span> muestra cómo queda con datos de ejemplo.</li>
+    <li><span class="tag">✉️ Enviarme una prueba</span> te manda a vos la plantilla tal como está en pantalla (aunque no
+        la hayas guardado), con <b>[PRUEBA]</b> en el asunto.</li>
+    <li><span class="tag">↺ Restaurar texto por defecto</span> vuelve al texto original.</li>
+    <li>«Nuevo informe» tiene el interruptor <b>«Enviar este correo»</b> para apagar todos los avisos de asignación.</li>
+  </ul>
+  <h4>Últimos envíos</h4>
+  <p>Lista los últimos 100 correos con su <b>estado</b> (<b>enviado</b>, <b>fallido</b> u <b>omitido</b>), el
+  <b>motivo</b> si falló, los intentos y quién lo disparó. Se puede filtrar «Solo fallidos». Arriba se ve el contador de
+  correos enviados en las <b>últimas 24 h</b> contra el cupo diario. El registro se borra solo a los 90 días.</p>
+  <div class="note">Si un correo figura como <b>fallido</b>, la acción (alta o asignación) <b>igual quedó hecha</b>.
+  Para un alta, usá <b>📨 Reenviar acceso</b>; para un aviso de informe, avisale al cliente por otro medio.</div>
+
   <!-- ══════════════════════ PARTE 2 · CLIENTE ══════════════════════ -->
   <h2 class="part-title"><span class="n">Parte 2</span> · Cliente</h2>
 
-  <h3 id="c-ingresar">1. Ingresar y recuperar contraseña</h3>
-  <p>Ingresá con el email y la contraseña que te dio el administrador. Si no la recordás, tocá
-  <b>«¿Olvidaste tu contraseña?»</b>, escribí tu email y recibirás un correo con un enlace para elegir una nueva
-  (revisá también la carpeta de spam).</p>
+  <h3 id="c-ingresar">1. Primer ingreso, ingresar y recuperar contraseña</h3>
+  <h4>Primer ingreso</h4>
+  <ol class="steps">
+    <li>Cuando te dan de alta, recibís un correo de <b>Equipos Consultores &lt;notificaciones@equipos.com.uy&gt;</b>
+        con el asunto <b>«Tu acceso al Portal de Informes de Equipos Consultores»</b> (revisá también la carpeta de spam).</li>
+    <li>Abrí el <b>enlace</b> del correo y elegí tu contraseña.</li>
+    <li>Ingresá al portal con tu email y la contraseña que elegiste.</li>
+  </ol>
+  <div class="note">El enlace sirve <b>una sola vez</b> y <b>vence a la hora</b>. Si venció, entrá al portal, escribí tu
+  email y tocá <b>«¿Olvidaste tu contraseña?»</b> para recibir uno nuevo.</div>
+  <h4>Ingresar y recuperar la contraseña</h4>
+  <p>Ingresá con tu email y tu contraseña. Si no la recordás, tocá <b>«¿Olvidaste tu contraseña?»</b>, escribí tu email
+  y recibirás un correo de <b>notificaciones@equipos.com.uy</b> con un enlace para elegir una nueva (revisá también la
+  carpeta de spam).</p>
   <figure>
     <img src="manual-img/login-recuperar.png" alt="Recuperar contraseña desde el login" />
     <figcaption>Recuperación de contraseña desde la pantalla de ingreso.</figcaption>
@@ -302,6 +411,10 @@
     <figcaption>Un informe abierto en el visor del portal (con marca de agua).</figcaption>
   </figure>
   <div class="tip">Con <b>← Volver</b> regresás a la lista de informes.</div>
+  <h3 id="c-avisos">4. Avisos por correo</h3>
+  <p>Cuando te habilitan un informe nuevo, recibís un correo de <b>notificaciones@equipos.com.uy</b> con el nombre del
+  informe (o la lista, si son varios), la carpeta donde está, hasta cuándo está disponible (si tiene vencimiento) y el
+  enlace al portal. Ingresá al portal para verlo.</p>
 
   <footer>
     Equipos Consultores · Portal de Informes — Manual de usuario.<br>

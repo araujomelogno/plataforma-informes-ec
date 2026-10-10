@@ -3,8 +3,11 @@
     "public": ".",
     "ignore": [
       "firebase.json",
+      "firestore.indexes.json",
       "**/.*",
-      "**/node_modules/**"
+      "**/node_modules/**",
+      "functions/**",
+      "**/*.md"
     ],
     "rewrites": [
       {
@@ -12,5 +15,35 @@
         "destination": "/index.html"
       }
     ]
+  },
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "runtime": "python311",
+      "ignore": [
+        "venv",
+        ".venv",
+        ".git",
+        "__pycache__",
+        "tests",
+        ".pytest_cache",
+        "pytest.ini"
+      ],
+      "predeploy": [
+        "cd \"$RESOURCE_DIR\" && (test -d venv || python3.11 -m venv venv) && venv/bin/pip install --quiet --disable-pip-version-check -r requirements.txt"
+      ]
+    }
+  ],
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "emulators": {
+    "auth": { "port": 9099 },
+    "functions": { "port": 5001 },
+    "firestore": { "port": 8080 },
+    "hosting": { "port": 5000 },
+    "ui": { "enabled": true }
   }
 }
