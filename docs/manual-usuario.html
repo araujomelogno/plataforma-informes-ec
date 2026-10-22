@@ -135,6 +135,8 @@
       <li><a href="#a-metricas">Métricas</a></li>
       <li><a href="#a-dinamicos">Informes HTML dinámicos</a></li>
       <li><a href="#a-correos">Configuración → Correos</a></li>
+      <li><a href="#a-matriz">Matriz usuarios / informes</a></li>
+      <li><a href="#a-mis-informes">Mis informes (para administradores)</a></li>
     </ol>
     <div class="part">Parte 2 · Cliente</div>
     <ol>
@@ -159,9 +161,11 @@
   <h3 id="a-panel">2. El panel de administración</h3>
   <p>El menú lateral tiene estas secciones:</p>
   <ul class="dots">
+    <li><b>⭐ Mis informes</b> — los informes que te asignaron, para tenerlos a mano (ver punto 15).</li>
     <li><b>Informes</b> — subir, organizar en carpetas, actualizar y compartir documentos.</li>
     <li><b>Usuarios</b> — crear/importar usuarios y administrar sus accesos.</li>
     <li><b>Permisos</b> — asignar, por usuario, qué informes ve y con qué protecciones.</li>
+    <li><b>Matriz usuarios/informes</b> — quién tiene acceso a qué, de un vistazo (ver punto 14).</li>
     <li><b>Métricas</b> — accesos al portal y uso de los dashboards.</li>
     <li><b>Docs de clientes</b> — documentos que subieron los clientes.</li>
     <li><b>⚙️ Configuración → Correos</b> — textos de los correos que manda el portal y registro de envíos (ver punto 13).</li>
@@ -208,6 +212,10 @@
   <p>Arriba de la lista está la casilla <b>«📧 Avisar al usuario por correo al habilitar un informe»</b> (marcada por
   defecto): cada usuario que marques recibe un aviso con el nombre del informe y el enlace al portal. Desmarcala si
   estás preparando accesos antes de publicar y no querés que se enteren todavía.</p>
+  <p>En la lista también aparecen los <b>administradores</b>, con la insignia <span class="tag">admin</span>: marcar un
+  informe a un admin se lo deja a mano en su sección <b>⭐ Mis informes</b>. Para ellos el aviso por correo va en una
+  casilla aparte, <b>«Avisar también a los admins»</b>, que viene <b>destildada</b>. A los admins no se les muestran
+  protecciones ni caducidad.</p>
   <figure>
     <img src="manual-img/admin-usuarios-informe.png" alt="Diálogo de usuarios de un informe" />
     <figcaption>Diálogo «Usuarios con acceso»: buscá y marcá los usuarios que pueden ver el informe.</figcaption>
@@ -252,8 +260,8 @@
   <h4>Acciones de cada usuario</h4>
   <p>La tabla tiene un <b>buscador por email</b> y filtros por dominio y por creador. En cada usuario:</p>
   <ul class="dots">
-    <li><b>🔐 Permisos</b> — ir a asignarle informes (ver punto 10).</li>
-    <li><b>⚙️ Parámetros</b> — valores por usuario para los informes HTML (ver punto 9).</li>
+    <li><b>🔐 Permisos</b> — ir a asignarle informes (ver punto 10). También en los administradores.</li>
+    <li><b>⚙️ Parámetros</b> — valores por usuario para los informes HTML (ver punto 9). También en los administradores.</li>
     <li><b>👁 Accesos</b> — ver qué informes tiene asignados.</li>
     <li><b>📨 Reenviar acceso</b> — genera un enlace nuevo y se lo manda por correo. Si el usuario nunca ingresó recibe
         el correo de <b>bienvenida</b>; si ya ingresó alguna vez, el de <b>restablecer contraseña</b>. Sirve cuando el
@@ -270,6 +278,10 @@
   <p>El botón <span class="tag">⚙️ Parámetros</span> permite definir, por usuario, pares <b>clave/valor</b>
   (por ejemplo <code>clienteId = 777</code>, <code>region = norte</code>, <code>plan = premium</code>). El portal se los
   envía a los informes <b>HTML</b> de ese usuario, que pueden renderizarse en función de ellos.</p>
+  <p>Los <b>administradores</b> también pueden tener parámetros (incluso los propios). Un admin con parámetros ve los
+  dashboards parametrizados con esos valores, tanto en la <b>vista previa</b> (👁) como en <b>⭐ Mis informes</b>, igual
+  que los vería un cliente con los mismos parámetros. Si cambiás tus propios parámetros, el próximo informe que abras
+  ya los usa, sin recargar la página.</p>
   <figure>
     <img src="manual-img/admin-parametros.png" alt="Diálogo de parámetros de un usuario" />
     <figcaption>Parámetros de un usuario: agregá los pares clave/valor y guardá.</figcaption>
@@ -286,6 +298,9 @@
   </ul>
   <p>Los cambios se guardan automáticamente. (Esto mismo se puede hacer, más rápido para un informe puntual, con el
   botón «Usuarios» del punto 7.)</p>
+  <div class="note">En el selector también aparecen los <b>administradores</b> (marcados «· admin»). A un admin se le
+  marcan informes para que los tenga a mano en <b>⭐ Mis informes</b>; igual ve y administra todos, así que no se le
+  muestran protecciones ni caducidad, y la casilla de aviso por correo viene <b>destildada</b>.</div>
   <h4>Aviso por correo al habilitar un informe</h4>
   <p>Cada vez que le habilitás un informe a un usuario, el portal le manda un correo <b>«Nuevo informe»</b> con el
   nombre del informe, su carpeta, la fecha de caducidad (si la configuraste) y el enlace al portal.</p>
@@ -297,7 +312,9 @@
         caducidad antes de que salga el aviso.</li>
     <li>Si <b>destildás</b> el informe antes de que salga el aviso, no se manda nada.</li>
     <li><b>No</b> generan correo: quitar un acceso, cambiar una protección o la caducidad, ni volver a marcar un informe
-        que ya tenía. Los administradores no reciben estos avisos.</li>
+        que ya tenía.</li>
+    <li>Un <b>administrador</b> recibe el aviso solo si dejás tildada la casilla (para ellos viene destildada): esos
+        correos salen del mismo cupo diario que los de los clientes.</li>
   </ul>
   <figure>
     <img src="manual-img/admin-permisos.png" alt="Sección Permisos" />
@@ -309,7 +326,8 @@
   <h3 id="a-metricas">11. Métricas</h3>
   <p>En <b>Métricas</b> se registra cada acceso al portal: <b>quién</b> ingresa, <b>cuántas veces</b>, <b>por cuánto
   tiempo</b> y desde qué <b>IP</b>. También hay «Analítica de dashboards»: por informe, qué pestañas/secciones usan los
-  clientes (visitas y tiempo).</p>
+  clientes (visitas y tiempo). Lo que los administradores abren desde <b>⭐ Mis informes</b> queda marcado como uso
+  interno y <b>no</b> se suma a la analítica de dashboards de los clientes.</p>
 
   <h3 id="a-dinamicos">12. Informes HTML dinámicos <span class="badge">avanzado</span></h3>
   <p>Un mismo informe HTML puede mostrar <b>contenido distinto según el usuario</b>, usando los parámetros del punto 9.
@@ -367,6 +385,46 @@
   correos enviados en las <b>últimas 24 h</b> contra el cupo diario. El registro se borra solo a los 90 días.</p>
   <div class="note">Si un correo figura como <b>fallido</b>, la acción (alta o asignación) <b>igual quedó hecha</b>.
   Para un alta, usá <b>📨 Reenviar acceso</b>; para un aviso de informe, avisale al cliente por otro medio.</div>
+
+  <h3 id="a-matriz">14. Matriz usuarios / informes</h3>
+  <p>La <b>Matriz usuarios/informes</b> muestra en una sola tabla qué usuario tiene acceso a qué informe (✓). Para que
+  no se llene de columnas vacías, <b>solo aparecen los usuarios que tienen al menos un ✓ en los informes que se están
+  viendo</b>. Al escribir en <b>«🔎 Informe…»</b> la tabla se angosta a los usuarios de esos informes; el filtro
+  <b>«🔎 Usuario (email)…»</b> se aplica encima.</p>
+  <ul class="dots">
+    <li>Arriba de la tabla se indica cuántos se muestran: <i>«Mostrando 12 de 87 usuarios (los demás no tienen acceso a
+        los informes filtrados)»</i>.</li>
+    <li>Si nadie tiene acceso a los informes filtrados, se ve <i>«Ningún usuario tiene acceso a estos informes»</i>.</li>
+    <li><b>Mostrar todos los usuarios</b>: vuelve a una columna por usuario, aunque no tenga nada (útil para ver quién
+        no tiene acceso).</li>
+    <li><b>Ocultar informes sin usuarios</b>: esconde las filas de informes sin ningún ✓ entre los usuarios mostrados.</li>
+    <li>Las dos casillas se recuerdan en tu navegador.</li>
+    <li>Los <b>administradores</b> con informes asignados aparecen como columna, marcados <b>ADMIN</b>.</li>
+  </ul>
+  <figure>
+    <img src="manual-img/admin-matriz.png" alt="Matriz usuarios / informes" />
+    <figcaption>Matriz: solo los usuarios con algún acceso a los informes visibles (los admins, marcados).</figcaption>
+  </figure>
+
+  <h3 id="a-mis-informes">15. Mis informes (para administradores)</h3>
+  <p>Un administrador ve todos los informes en <b>Informes</b>, pero puede tener a mano «los suyos» (por ejemplo, los
+  del estudio que sigue) en <b>⭐ Mis informes</b>, arriba en el menú. Se navega por carpetas igual que la vista del
+  cliente.</p>
+  <ol class="steps">
+    <li>Otro admin (o vos mismo) te marca informes desde <b>Permisos</b>, el diálogo <b>👥 Usuarios</b> del informe o la
+        tabla de usuarios (<b>🔐 Permisos</b>).</li>
+    <li>Entrá a <b>⭐ Mis informes</b> y hacé clic en el informe para abrirlo.</li>
+  </ol>
+  <ul class="dots">
+    <li>Se abre <b>sin protecciones</b> (como la vista previa) y con <b>tus parámetros</b> (punto 9).</li>
+    <li>Si no tenés informes asignados, la sección te lo indica con un enlace a <b>Permisos</b>.</li>
+    <li>Al ingresar seguís entrando en <b>Informes</b>; «Mis informes» es un atajo, no cambia tu pantalla de inicio ni lo
+        que podés ver.</li>
+  </ul>
+  <figure>
+    <img src="manual-img/admin-mis-informes.png" alt="Mis informes del administrador" />
+    <figcaption>«Mis informes»: los informes asignados al administrador, dentro de sus carpetas.</figcaption>
+  </figure>
 
   <!-- ══════════════════════ PARTE 2 · CLIENTE ══════════════════════ -->
   <h2 class="part-title"><span class="n">Parte 2</span> · Cliente</h2>

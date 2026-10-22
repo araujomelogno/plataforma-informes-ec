@@ -565,6 +565,7 @@
     table.matrix th.mx-corner { position: sticky; left: 0; top: 0; z-index: 4; background: var(--gray-light); text-align: left; padding: .4rem .6rem; white-space: nowrap; border-left: 1px solid var(--border); border-top: 1px solid var(--border); }
     table.matrix th.mx-user { position: sticky; top: 0; z-index: 3; height: 150px; padding: .25rem; vertical-align: bottom; border-top: 1px solid var(--border); }
     table.matrix th.mx-user > span { display: inline-block; writing-mode: vertical-rl; transform: rotate(180deg); font-weight: 600; color: var(--dark); max-height: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    table.matrix .mx-admin { color: var(--orange-dark); font-weight: 800; text-transform: uppercase; font-size: .62rem; letter-spacing: .06em; }
     table.matrix th.mx-total-col { position: sticky; top: 0; z-index: 3; padding: .3rem .55rem; border-top: 1px solid var(--border); }
     table.matrix td.mx-name { position: sticky; left: 0; z-index: 2; background: var(--white); text-align: left; padding: .35rem .6rem; font-weight: 600; white-space: nowrap; border-left: 1px solid var(--border); }
     table.matrix tbody tr:hover td { background: #FAFAFA; }
@@ -829,6 +830,9 @@
       </div>
 
       <div class="sidebar-section-label">Administración</div>
+      <button class="nav-item" id="nav-mine" onclick="switchTab('mine', this)">
+        <span class="nav-icon">⭐</span> Mis informes
+      </button>
       <button class="nav-item active" id="nav-reports" onclick="switchTab('reports', this)">
         <span class="nav-icon">📄</span> Informes
       </button>
@@ -876,6 +880,15 @@
     </div>
 
     <div class="main">
+      <div id="tab-mine" class="hidden">
+        <div class="page-header">
+          <div class="accent-bar"></div>
+          <h2>Mis <span class="accent">Informes</span></h2>
+          <p>Los informes que te asignaron, con la misma navegación por carpetas que ve un cliente</p>
+        </div>
+        <div id="mine-reports-container"><div class="loading">Cargando informes...</div></div>
+      </div>
+
       <div id="tab-reports">
         <div class="page-header">
           <div class="accent-bar"></div>
@@ -1186,7 +1199,16 @@
           <div style="padding:.9rem 1.25rem 0;display:flex;gap:.6rem;flex-wrap:wrap;align-items:center">
             <input type="text" id="matrix-filter-report" placeholder="🔎 Informe…" oninput="renderMatrix()" style="flex:1;min-width:180px;max-width:280px" />
             <input type="text" id="matrix-filter-user" placeholder="🔎 Usuario (email)…" oninput="renderMatrix()" style="flex:1;min-width:180px;max-width:280px" />
+            <label class="notify-toggle" style="margin:0">
+              <input type="checkbox" id="matrix-showAllUsers" onchange="setMatrixPref('showAllUsers', this.checked)" />
+              <span>Mostrar todos los usuarios</span>
+            </label>
+            <label class="notify-toggle" style="margin:0">
+              <input type="checkbox" id="matrix-hideEmptyReports" onchange="setMatrixPref('hideEmptyReports', this.checked)" />
+              <span>Ocultar informes sin usuarios</span>
+            </label>
           </div>
+          <div id="matrix-summary" class="mail-quota" style="padding:.6rem 1.25rem 0"></div>
           <div id="matrix-content"><div class="loading">Cargando matriz...</div></div>
         </div>
       </div>
@@ -1669,13 +1691,14 @@ async function renderUser() {
 
 /* ── TABS ── */
 function switchTab(tab, btn) {
-  ['reports','users','permissions','matrix','metrics-summary','metrics-sessions','metrics-dashboards','clientdocs','config-correos'].forEach(t =>
+  ['mine','reports','users','permissions','matrix','metrics-summary','metrics-sessions','metrics-dashboards','clientdocs','config-correos'].forEach(t =>
     el('tab-'+t).classList.toggle('hidden', t !== tab));
   document.querySelectorAll('.nav-item').forEach(b => { b.classList.remove('active'); b.classList.remove('active-parent'); });
   if (btn) btn.classList.add('active');
   // El padre "Métricas" queda resaltado mientras se ve cualquiera de sus sub-páginas.
   const nm = el('nav-metrics'); if (nm && tab.indexOf('metrics') === 0) nm.classList.add('active-parent');
   const nc = el('nav-config');  if (nc && tab.indexOf('config') === 0)  nc.classList.add('active-parent');
+  if (tab === 'mine') loadUserReports('mine-reports-container');
   if (tab === 'permissions') populatePermSelect();
   if (tab === 'matrix') loadMatrix();
   if (tab === 'metrics-summary' || tab === 'metrics-sessions') loadMetrics();
@@ -1728,15 +1751,30 @@ async function loadMatrix() {
   }
 }
 
+// Interruptores de la matriz (P1): se recuerdan en el navegador del admin.
+// "Mostrar todos los usuarios" (B5) vuelve a una columna por usuario aunque no
+// tenga ningún ✓; "Ocultar informes sin usuarios" (B6) esconde las filas sin ✓
+// entre los usuarios visibles.
+function matrixPref(key) { try { return localStorage.getItem('matrix.' + key) === '1'; } catch { return false; } }
+function setMatrixPref(key, on) {
+  try { localStorage.setItem('matrix.' + key, on ? '1' : '0'); } catch {}
+  renderMatrix();
+}
+
 function renderMatrix() {
   const cont = el('matrix-content'); if (!cont || !_matrixAccess) return;
   const rf = (el('matrix-filter-report') && el('matrix-filter-report').value || '').trim().toLowerCase();
   const uf = (el('matrix-filter-user') && el('matrix-filter-user').value || '').trim().toLowerCase();
+  const showAll = matrixPref('showAllUsers');
+  const hideEmptyReports = matrixPref('hideEmptyReports');
   const access = _matrixAccess;
+  const summary = el('matrix-summary');
+  const setSummary = (html) => { if (summary) summary.innerHTML = html; };
+  ['showAllUsers', 'hideEmptyReports'].forEach(k => { const c = el('matrix-' + k); if (c) c.checked = matrixPref(k); });
 
-  const allNonAdmin = allUsers.filter(u => u.role !== 'admin');
-  let users = allNonAdmin
-    .map(u => ({ uid: u.id, email: u.email || '' }))
+  // Admins incluidos: también pueden tener informes asignados (atajo "Mis informes").
+  let users = allUsers
+    .map(u => ({ uid: u.id, email: u.email || '', admin: u.role === 'admin' }))
     .filter(u => !uf || u.email.toLowerCase().includes(uf))
     .sort((a, b) => a.email.localeCompare(b.email, 'es', { sensitivity: 'base' }));
   let reports = allReports
@@ -1744,15 +1782,36 @@ function renderMatrix() {
     .filter(r => !rf || r.name.toLowerCase().includes(rf))
     .sort((a, b) => a.name.localeCompare(b.name, 'es', { sensitivity: 'base' }));
 
-  if (!allNonAdmin.length) { cont.innerHTML = emptyHTML('👤', 'No hay usuarios (no-admin) para mostrar.'); return; }
-  if (!allReports.length)  { cont.innerHTML = emptyHTML('📭', 'No hay informes para mostrar.'); return; }
+  setSummary('');
+  if (!allUsers.length)   { cont.innerHTML = emptyHTML('👤', 'No hay usuarios para mostrar.'); return; }
+  if (!allReports.length) { cont.innerHTML = emptyHTML('📭', 'No hay informes para mostrar.'); return; }
   if (!users.length || !reports.length) { cont.innerHTML = emptyHTML('🔎', 'Nada coincide con los filtros.'); return; }
 
   const has = (uid, rid) => !!(access[uid] && access[uid].has(rid));
 
+  // Columnas: solo los usuarios con al menos un ✓ en los informes visibles (B1).
+  // Los ocultos tienen 0 en todas esas filas, así que el "Total" no cambia.
+  const candidates = users.length;
+  if (!showAll) users = users.filter(u => reports.some(r => has(u.uid, r.id)));
+  // Filas: opcionalmente, solo los informes con algún ✓ entre esos usuarios (B6).
+  const reportsBefore = reports.length;
+  if (hideEmptyReports) reports = reports.filter(r => users.some(u => has(u.uid, r.id)));
+
+  const plural = (n, s, p) => `${n} ${n === 1 ? s : p}`;
+  let line = showAll
+    ? `Mostrando ${plural(users.length, 'usuario', 'usuarios')} (todos, tengan o no acceso).`
+    : `Mostrando ${users.length} de ${plural(candidates, 'usuario', 'usuarios')}` +
+      (users.length < candidates ? ' (los demás no tienen acceso a los informes filtrados).' : '.');
+  if (hideEmptyReports && reports.length < reportsBefore)
+    line += ` Se ocultan ${plural(reportsBefore - reports.length, 'informe sin usuarios', 'informes sin usuarios')}.`;
+  setSummary(line);
+
+  if (!users.length) { cont.innerHTML = emptyHTML('🔒', 'Ningún usuario tiene acceso a estos informes.'); return; }
+  if (!reports.length) { cont.innerHTML = emptyHTML('📭', 'Ningún informe tiene usuarios con acceso entre los mostrados.'); return; }
+
   const head = `<tr>
     <th class="mx-corner">Informe \\ Usuario</th>
-    ${users.map(u => `<th class="mx-user" title="${esc(u.email)}"><span>${esc(u.email)}</span></th>`).join('')}
+    ${users.map(u => `<th class="mx-user" title="${esc(u.email)}${u.admin ? ' (admin)' : ''}"><span>${u.admin ? '<b class="mx-admin">admin</b> ' : ''}${esc(u.email)}</span></th>`).join('')}
     <th class="mx-total-col" title="Usuarios con acceso a este informe">Total</th>
   </tr>`;
 
@@ -2560,9 +2619,9 @@ async function openReportUsersModal(reportId, name) {
     const snap = await db.collection('userAccess').get();
     const accessByUid = {}, optionsByUid = {};
     snap.docs.forEach(d => { const dt = d.data(); accessByUid[d.id] = (dt.reportIds || []); optionsByUid[d.id] = (dt.options || {}); });
+    // Los admins también se pueden asignar: les sirve de atajo ("Mis informes").
     const users = allUsers
-      .filter(u => u.role !== 'admin')
-      .map(u => ({ uid: u.id, email: u.email || '', has: (accessByUid[u.id] || []).includes(reportId), opts: (optionsByUid[u.id] || {})[reportId] || {} }))
+      .map(u => ({ uid: u.id, email: u.email || '', admin: u.role === 'admin', has: (accessByUid[u.id] || []).includes(reportId), opts: (optionsByUid[u.id] || {})[reportId] || {} }))
       .sort((a, b) => a.email.localeCompare(b.email, 'es'));
     _reportUsersModal = { reportId, name, users };
     setUsersModalBody(reportUsersShellHTML());
@@ -2575,13 +2634,14 @@ async function openReportUsersModal(reportId, name) {
 function reportUsersShellHTML() {
   const st = _reportUsersModal; if (!st) return '';
   if (!st.users.length) {
-    return `<div class="folder-tree-empty">No hay usuarios (no-admin) para asignar. Creá usuarios en la pestaña Usuarios.</div>`;
+    return `<div class="folder-tree-empty">No hay usuarios para asignar. Creá usuarios en la pestaña Usuarios.</div>`;
   }
   return `
     <p style="font-size:.85rem;color:var(--gray);font-weight:500;margin:0 0 .7rem">
       Elegí qué usuarios pueden ver <b>${esc(st.name)}</b>. Los cambios se guardan automáticamente.
     </p>
     ${notifyCheckboxHTML('report-users-notify')}
+    ${st.users.some(u => u.admin) ? notifyCheckboxHTML('report-users-notify-admins', false, 'Avisar también a los admins (salen del mismo cupo diario de correos)') : ''}
     <input type="text" id="report-users-filter" placeholder="Buscar usuario por email…"
       oninput="renderReportUsersList()" style="width:100%;margin-bottom:.6rem" />
     <div id="report-users-count" style="font-size:.78rem;color:var(--gray);font-weight:600;margin-bottom:.5rem"></div>
@@ -2605,6 +2665,7 @@ function renderReportUsersList() {
           <input type="checkbox" ${u.has ? 'checked' : ''} onchange="toggleReportUser('${u.uid}', this.checked, this)" />
           <span class="user-pick-avatar">${esc((u.email[0] || '?').toUpperCase())}</span>
           <span class="user-pick-email">${esc(u.email)}</span>
+          ${u.admin ? '<span class="badge badge-admin">admin</span>' : ''}
         </label>
         <div class="user-pick-opts ${u.has ? '' : 'hidden'}" id="uopts-${u.uid}">${u.has ? reportUserOptsHTML(u.uid, st.reportId, u.opts) : ''}</div>
       </div>`).join('') : `<div class="folder-tree-empty" style="padding:.7rem">No hay usuarios que coincidan.</div>`;
@@ -2620,7 +2681,9 @@ async function toggleReportUser(uid, grant, cb) {
   const st = _reportUsersModal; if (!st) return;
   if (cb) cb.disabled = true;
   try {
-    const options = await grantReportToUser(uid, st.reportId, grant, notifyChecked('report-users-notify'));
+    const target = st.users.find(x => x.uid === uid);
+    const notify = (target && target.admin) ? notifyChecked('report-users-notify-admins', false) : notifyChecked('report-users-notify');
+    const options = await grantReportToUser(uid, st.reportId, grant, notify);
     const u = st.users.find(x => x.uid === uid);
     if (u) { u.has = grant; if (grant) u.opts = options[st.reportId] || {}; }
     // Mostrar/ocultar las opciones de permisos de ese usuario en el momento
@@ -2649,6 +2712,9 @@ async function toggleReportUser(uid, grant, cb) {
 // Bloque de opciones de un usuario en el modal de acceso por informe: las mismas
 // protecciones y caducidad que en la pestaña Permisos, editables inline.
 function reportUserOptsHTML(uid, reportId, opts) {
+  // A un admin no se le aplican protecciones ni caducidad (puede bajarse el
+  // archivo desde la lista general): solo se muestra quién se lo asignó.
+  if (isAdminUid(uid)) return `<div style="padding:.15rem 0 .55rem 2.5rem;border-bottom:1px dashed var(--border);margin-bottom:.15rem">${grantAttrHTML(opts)}</div>`;
   const o = mergeOpts(opts);
   const expVal = (opts && opts.expiresAt) || '';
   return `<div style="display:grid;gap:.3rem;padding:.15rem 0 .55rem 2.5rem;border-bottom:1px dashed var(--border);margin-bottom:.15rem">
@@ -2762,6 +2828,8 @@ async function saveUserParams(uid) {
   try {
     await db.collection('users').doc(uid).update({ params });
     const u = allUsers.find(x => x.id === uid); if (u) u.params = params;
+    // Parámetros propios: la próxima apertura de un informe ya usa los nuevos.
+    if (currentUser && uid === currentUser.uid && currentUserData) currentUserData.params = params;
     closeParamsModal();
   } catch (e) {
     const a = el('params-alert');
@@ -2830,9 +2898,9 @@ function renderUsersTable() {
           const roleBtn = isAdmin
             ? `<button class="btn btn-outline btn-sm" ${isSelf ? 'disabled title="No podés quitarte el admin a vos mismo"' : `onclick="changeRole('${u.id}','${esc(u.email)}','user')"`}>⬇ Quitar admin</button>`
             : `<button class="btn btn-orange btn-sm" onclick="changeRole('${u.id}','${esc(u.email)}','admin')">⬆ Hacer admin</button>`;
-          const permBtn = isAdmin ? '' :
+          const permBtn =
             `<button class="btn btn-outline btn-sm" onclick="goToUserPerms('${u.id}')">🔐 Permisos</button>`;
-          const paramsBtn = isAdmin ? '' :
+          const paramsBtn =
             `<button class="btn btn-outline btn-sm" onclick="openUserParamsModal('${u.id}','${esc(u.email)}')">⚙️ Parámetros</button>`;
           const mfaLabel = u.mfaRequired ? (u.mfaEnrolled ? '🔒 2FA activa' : '🔒 2FA (pendiente)') : '🔓 2FA: no';
           const mfaBtn = `<button class="btn btn-outline btn-sm" onclick="toggle2FA('${u.id}','${esc(u.email)}',${u.mfaRequired ? 'false' : 'true'})" title="Verificación en dos pasos">${mfaLabel}</button>`;
@@ -2888,7 +2956,7 @@ async function changeRole(uid, email, newRole) {
     await db.collection('users').doc(uid).update({ role: newRole });
     await loadUsers();
     renderUsersTable();
-    populatePermSelect();   // el selector de permisos lista solo usuarios no-admin
+    populatePermSelect();   // el selector de permisos marca a los admins
   } catch (e) {
     alert('No se pudo cambiar el rol: ' + (e.message || e));
   }
@@ -3154,10 +3222,11 @@ function goToUserPerms(userId) {
 function populatePermSelect() {
   const sel = el('perm-user-select'); if (!sel) return;
   const prev = sel.value;
-  const nonAdmins = allUsers.filter(u => u.role !== 'admin')
+  // Incluye a los admins (marcados): también pueden tener informes asignados.
+  const users = allUsers.slice()
     .sort((a, b) => String(a.email || '').localeCompare(String(b.email || ''), 'es', { sensitivity: 'base' }));
   sel.innerHTML = '<option value="">— Elegí un usuario —</option>' +
-    nonAdmins.map(u => `<option value="${u.id}" ${u.id===prev?'selected':''}>${esc(u.email)}</option>`).join('');
+    users.map(u => `<option value="${u.id}" ${u.id===prev?'selected':''}>${esc(u.email)}${u.role === 'admin' ? ' · admin' : ''}</option>`).join('');
   if (prev && sel.value === prev) loadUserPermissions();
 }
 
@@ -3177,12 +3246,18 @@ async function loadUserPermissions() {
     cont.innerHTML = emptyHTML('📭', 'No hay informes disponibles para asignar');
     return;
   }
+  // Un admin ve y administra todos los informes: la asignación es solo un atajo
+  // ("Mis informes"), así que no se le muestran protecciones ni caducidad.
+  const isAdm = isAdminUid(userId);
   cont.innerHTML = `
     <p style="font-size:0.8rem;color:var(--gray);font-weight:500">
-      Marcá los informes a los que puede acceder este usuario y configurá las protecciones de cada uno.<br>
+      ${isAdm
+        ? `<span class="badge badge-admin">admin</span> Marcá los informes que este administrador va a tener a mano en <b>«Mis informes»</b>.
+           Igual ve y administra todos; a los admins no se les aplican protecciones ni caducidad.<br>`
+        : `Marcá los informes a los que puede acceder este usuario y configurá las protecciones de cada uno.<br>`}
       Los cambios se guardan automáticamente.
     </p>
-    ${notifyCheckboxHTML('perm-notify')}
+    ${notifyCheckboxHTML('perm-notify', !isAdm)}
     <div class="perm-grid">
       ${allReports.map(r => {
         const on = granted.includes(r.id);
@@ -3195,7 +3270,7 @@ async function loadUserPermissions() {
           <span class="perm-label">${fileIcon(r.name)} ${esc(r.name)}</span>
         </label>
         <div class="perm-opts ${on?'':'disabled'}">
-          ${OPT_DEFS.map(d => `
+          ${isAdm ? '' : `${OPT_DEFS.map(d => `
           <label class="perm-opt">
             <input type="checkbox" data-optkey="${d.key}" ${o[d.key]?'checked':''} ${on?'':'disabled'}
                    onchange="toggleOpt('${userId}','${r.id}','${d.key}',this.checked)" />
@@ -3209,7 +3284,7 @@ async function loadUserPermissions() {
                      onchange="setExpiry('${userId}','${r.id}',this.value)" />
               ${expVal ? `<button type="button" class="btn btn-outline btn-sm" style="flex:0 0 auto;padding:.15rem .45rem;font-size:.68rem" onclick="clearExpiry('${userId}','${r.id}',this)">✕</button>` : ''}
             </div>
-          </div>
+          </div>`}
           ${on ? grantAttrHTML(optsMap[r.id]) : ''}
         </div>
       </div>`;
@@ -3220,13 +3295,16 @@ async function loadUserPermissions() {
 // Casilla "Avisar al usuario por correo" (marcada por defecto) de la pestaña
 // Permisos y del modal "Usuarios" de cada informe. Si se desmarca, habilitar un
 // informe no genera correo (útil para preparar accesos antes de publicar).
-function notifyCheckboxHTML(id) {
+// Para un admin viene destildada: el aviso le sirve poco y sale del mismo cupo
+// diario de correos de notificaciones@ (compartido con paneles).
+function notifyCheckboxHTML(id, checked = true, label = 'Avisar al usuario por correo al habilitar un informe') {
   return `<label class="notify-toggle" title="Al habilitar un informe, el usuario recibe un aviso por correo desde notificaciones@equipos.com.uy">
-      <input type="checkbox" id="${id}" checked />
-      <span>📧 Avisar al usuario por correo al habilitar un informe</span>
+      <input type="checkbox" id="${id}" ${checked ? 'checked' : ''} />
+      <span>📧 ${esc(label)}</span>
     </label>`;
 }
-function notifyChecked(id) { const c = el(id); return !c || c.checked; }
+function notifyChecked(id, fallback = true) { const c = el(id); return c ? c.checked : fallback; }
+function isAdminUid(uid) { const u = allUsers.find(x => x.id === uid); return !!(u && u.role === 'admin'); }
 
 // Da o quita el acceso de un usuario a un informe (colección userAccess).
 // Al conceder, inicializa las protecciones por defecto. Usado tanto por la
@@ -3304,8 +3382,13 @@ function clearExpiry(userId, reportId, btn) {
 }
 
 /* ── USER VIEW ── */
-async function loadUserReports() {
-  const cont = el('user-reports-container');
+// También la usa el admin en "Mis informes" (otro contenedor): los informes que
+// tiene asignados, con la misma navegación por carpetas que ve un cliente.
+let _userReportsCont = 'user-reports-container';
+const userIsAdmin = () => !!(currentUserData && currentUserData.role === 'admin');
+async function loadUserReports(containerId = 'user-reports-container') {
+  _userReportsCont = containerId;
+  const cont = el(containerId);
   const accessSnap = await db.collection('userAccess').doc(currentUser.uid).get();
   const data = accessSnap.exists ? accessSnap.data() : {};
   const ids = data.reportIds || [];
@@ -3313,7 +3396,9 @@ async function loadUserReports() {
   await loadFolders();   // el cliente también lee las carpetas para poder navegar
   if (!ids.length) {
     _userReports = []; _userVisibleFolderIds = new Set(); _userFolderId = null;
-    cont.innerHTML = emptyHTML('📭', 'No tenés informes asignados aún.<br>Contactá al administrador.');
+    cont.innerHTML = userIsAdmin()
+      ? emptyHTML('📭', `No tenés informes asignados.<br><a href="#" onclick="goToUserPerms('${currentUser.uid}');return false">Asignátelos en la pestaña Permisos</a> para tenerlos a mano acá.`)
+      : emptyHTML('📭', 'No tenés informes asignados aún.<br>Contactá al administrador.');
     return;
   }
   const reports = await Promise.all(
@@ -3374,7 +3459,7 @@ function userBreadcrumbHTML() {
 function enterFolder(id) { _userFolderId = id || null; renderUserLevel(); }
 
 function renderUserLevel() {
-  const cont = el('user-reports-container');
+  const cont = el(_userReportsCont); if (!cont) return;
   const here = _userFolderId || null;
   // Subcarpetas visibles cuyo "padre visible más cercano" es este nivel (las que
   // cuelgan de carpetas ocultas se promueven hasta acá).
@@ -3407,7 +3492,7 @@ function renderUserLevel() {
   }).join('');
 
   const reportCards = reportsHere.map(r => {
-    if (accessExpired(myAccessOptions[r.id])) return `
+    if (!userIsAdmin() && accessExpired(myAccessOptions[r.id])) return `
     <div class="report-card expired" onclick="showAccessExpired()" title="Acceso caducado">
       <div class="report-card-icon">${fileIcon(r.name)}</div>
       <h3>${esc(r.name)}</h3>
@@ -3425,11 +3510,16 @@ function renderUserLevel() {
 }
 
 async function openUserReport(storagePath, name, reportId) {
-  if (accessExpired(myAccessOptions[reportId])) { showAccessExpired(); return; }
+  // Un admin abre desde "Mis informes" sin protecciones ni caducidad (como en la
+  // vista previa), pero con su reportId para la analítica (marcada role: 'admin').
+  const admin = userIsAdmin();
+  if (!admin && accessExpired(myAccessOptions[reportId])) { showAccessExpired(); return; }
   showLoadingOverlay(name);
   try {
     const url = await storage.ref(storagePath).getDownloadURL();
-    const opts = mergeOpts(myAccessOptions[reportId]);
+    const opts = admin
+      ? { watermark: false, noPrint: false, noDownload: false, noCopy: false }
+      : mergeOpts(myAccessOptions[reportId]);
     await openViewer(url, name, opts, currentUser && currentUser.email, reportId);
   } catch (err) {
     alert('Error al cargar el informe: ' + (err.message || err));
@@ -3719,7 +3809,8 @@ function closeViewer() {
 
 // Recibe los eventos de analítica que el dashboard (iframe) manda por postMessage
 // y los guarda en Firestore, atados al usuario / sesión / informe.
-// Solo se activa en vistas de cliente (reportId presente); la vista previa del admin no registra.
+// Solo se activa con reportId (vista de cliente o "Mis informes" del admin, que queda
+// marcado con role: 'admin'); la vista previa del admin no registra.
 function setupDashboardAnalytics(iframe, reportId, name) {
   if (!reportId || !iframe || !currentUser) return;
   const handler = (e) => {
@@ -3730,6 +3821,9 @@ function setupDashboardAnalytics(iframe, reportId, name) {
     db.collection('dashboardEvents').add({
       uid: currentUser.uid,
       email: currentUser.email,
+      // El uso interno (admins desde "Mis informes") queda marcado y no se mezcla
+      // con el de los clientes en Métricas → Analítica de dashboards.
+      role: (currentUserData && currentUserData.role) || 'user',
       reportId: reportId,
       reportName: name,
       sessionId: currentSessionId || null,
@@ -4235,7 +4329,7 @@ async function loadDashboardAnalytics() {
   cont.innerHTML = '<div class="loading">Cargando analítica...</div>';
   try {
     const snap = await db.collection('dashboardEvents').orderBy('at', 'desc').limit(3000).get();
-    _dashEvents = snap.docs.map(d => d.data());
+    _dashEvents = snap.docs.map(d => d.data()).filter(ev => ev.role !== 'admin');
   } catch (e) {
     cont.innerHTML = emptyHTML('⚠️', 'No se pudo cargar la analítica.<br>¿Publicaste las reglas de Firestore para <b>dashboardEvents</b>?');
     return;

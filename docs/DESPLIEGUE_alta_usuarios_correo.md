@@ -442,8 +442,8 @@ punto. Entre paréntesis, el requisito de la spec.
 13. ☐ (R5) Hacer lo mismo desde Informes → 👥 Usuarios → llega **un** correo.
 14. ☐ (R5) Quitar el acceso, cambiar una protección o la caducidad, o volver a marcar un informe que ya tenía → no
     llega nada.
-15. ☐ (R5) A un usuario **admin** no le llegan avisos (los admins no figuran en Permisos; se puede probar dando rol
-    admin al usuario de prueba y habilitándole un informe desde el modal del informe — no aparece en la lista).
+15. ☐ (R5) A un usuario **admin** le llega el aviso solo si se deja tildada la casilla, que para admins viene
+    destildada (cambio posterior: ver `docs/DESPLIEGUE_admins_matriz.md`).
 16. ☐ (R8) Desmarcar «📧 Avisar al usuario por correo» y habilitar un informe → no llega correo y en «Últimos envíos»
     no aparece intento.
 17. ☐ (R9) Habilitar 5 informes en menos de 30 segundos → llega **1** correo con los 5 nombres.
@@ -545,9 +545,9 @@ cd .. && firebase emulators:exec --only firestore,auth --project demo-portal \
   "cd functions && venv/bin/python -m pytest -q"
 ```
 
-Resultado esperado: **33 passed**. Cubren, entre otros: alta + ficha + bienvenida; `permission-denied` para no
+Resultado esperado: **34 passed**. Cubren, entre otros: alta + ficha + bienvenida; `permission-denied` para no
 admins; email existente sin tocar la clave; SMTP caído → alta hecha + enlace devuelto y no guardado; reenvío con
-registro; tope de «¿Olvidaste…?»; trigger idempotente; quitar/cambiar opciones/reasignar no avisa; admins no reciben;
+registro; tope de «¿Olvidaste…?»; trigger idempotente; quitar/cambiar opciones/reasignar no avisa; admins con y sin aviso;
 «no notificar»; 5 informes → 1 correo; tildar/destildar → nada; plantilla apagada → omitido; fallo de envío no
 revierte el permiso; validación y armado de plantillas.
 

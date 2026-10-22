@@ -6,8 +6,10 @@ pestaña Permisos, el modal "Usuarios" del informe y cualquier vía futura.
 Flujo:
 
 1. **Trigger** (`registrar_cambio`): compara `reportIds` antes y después. Por
-   cada id nuevo —que no tenga `options[id].notificar == false` y cuyo usuario
-   no sea admin— crea `avisosPendientes/{eventId}-{reportId}` con `create()`.
+   cada id nuevo —que no tenga `options[id].notificar == false`— crea
+   `avisosPendientes/{eventId}-{reportId}` con `create()`. Los admins también
+   pueden tener informes asignados ("Mis informes") y reciben el aviso como
+   cualquier usuario si se dejó tildada la casilla (para ellos viene destildada).
    Si el documento ya existe, el trigger es un reintento del mismo cambio y no
    se vuelve a encolar: así un reintento no duplica correos.
 2. **Despacho** (`despachar`): junta los pendientes de cada usuario y, cuando
@@ -85,7 +87,7 @@ def registrar_cambio(db, mailer, event_id, uid, antes, despues, ahora=None):
     if not nuevos:
         return []
     ficha = db.collection("users").document(uid).get()
-    if not ficha.exists or (ficha.to_dict() or {}).get("role") == "admin":
+    if not ficha.exists:
         return []
 
     ahora = ahora or _ahora()
@@ -234,8 +236,8 @@ def _despachar_grupo(db, mailer, uid, items, config_correos):
     ficha_snap = db.collection("users").document(uid).get()
     ficha = (ficha_snap.to_dict() or {}) if ficha_snap.exists else None
 
-    if not ficha or ficha.get("role") == "admin" or not ficha.get("email"):
-        _cerrar(items, correo.OMITIDO, motivo="Usuario inexistente o admin.")
+    if not ficha or not ficha.get("email"):
+        _cerrar(items, correo.OMITIDO, motivo="Usuario inexistente o sin email.")
         return {"uid": uid, "estado": correo.OMITIDO}
 
     ids, vistos = [], set()
