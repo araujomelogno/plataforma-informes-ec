@@ -194,6 +194,18 @@ Código en [`functions/`](functions/) (Python 3.11). Despliegue, configuración 
 
 ---
 
+## ⭐ Admins con informes asignados y matriz compacta
+
+- Los **administradores** también pueden tener **parámetros** y **informes asignados** (Permisos, modal 👥 Usuarios
+  del informe, tabla de usuarios). Los asignados aparecen en **⭐ Mis informes**, con navegación por carpetas, sin
+  protecciones y con los parámetros del admin. El aviso por correo para admins viene destildado.
+- La **Matriz usuarios/informes** muestra solo los usuarios con algún acceso a los informes visibles; hay casillas
+  para mostrar todos y para ocultar informes sin usuarios.
+
+Despliegue y verificación: [`docs/DESPLIEGUE_admins_matriz.md`](docs/DESPLIEGUE_admins_matriz.md).
+
+---
+
 ## 📄 Formatos soportados y visor
 
 El administrador (y el cliente, en su propia sección) puede subir **cualquier tipo de archivo**.

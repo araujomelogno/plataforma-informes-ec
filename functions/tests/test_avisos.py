@@ -70,10 +70,24 @@ def test_quitar_o_cambiar_opciones_o_reasignar_no_avisa(entorno, mailer):
     assert avisos.registrar_cambio(db, mailer, "e3", "u1", antes, antes) == []
 
 
-def test_admin_no_recibe_avisos(entorno, mailer):
+def test_admin_con_aviso_activado_recibe(entorno, mailer):
     db, _ = entorno
     _base(db, rol="admin")
-    assert avisos.registrar_cambio(db, mailer, "e1", "u1", {}, _acceso(db, ["r1"])) == []
+    db.collection("config").document("correos").set({"ventanaAgrupadoMin": 0})
+    despues = _acceso(db, ["r1"], {"r1": {"notificar": True, "grantedByEmail": "otro@equipos.com.uy"}})
+    assert avisos.registrar_cambio(db, mailer, "e1", "u1", {}, despues) == ["r1"]
+    [m] = mailer.enviados
+    assert m["destino"] == "cliente@empresa.com" and "Informe 1" in m["asunto"]
+
+
+def test_admin_sin_aviso_no_recibe_ni_registra(entorno, mailer):
+    db, _ = entorno
+    _base(db, rol="admin")
+    db.collection("config").document("correos").set({"ventanaAgrupadoMin": 0})
+    despues = _acceso(db, ["r1"], {"r1": {"notificar": False}})
+    assert avisos.registrar_cambio(db, mailer, "e1", "u1", {}, despues) == []
+    assert mailer.enviados == []
+    assert list(db.collection("mailLog").stream()) == []
 
 
 def test_no_notificar(entorno, mailer):
