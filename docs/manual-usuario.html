@@ -307,9 +307,13 @@
   <ul class="dots">
     <li>La casilla <b>«📧 Avisar al usuario por correo al habilitar un informe»</b> (arriba de la lista, marcada por
         defecto) permite habilitar <b>sin avisar</b>.</li>
-    <li>Si le habilitás <b>varios informes seguidos</b>, le llega <b>un solo correo con la lista</b> (por defecto se
-        esperan 2 minutos sin cambios; se ajusta en Configuración → Correos). Así también podés cargar la fecha de
-        caducidad antes de que salga el aviso.</li>
+    <li>El correo sale <b>en el momento</b>, unos segundos después de marcar el informe, desde cualquiera de los tres
+        lugares donde se asignan informes: <b>Permisos</b>, el diálogo <b>👥 Usuarios</b> del informe y
+        <b>Usuarios → 🔐 Permisos</b>. Abajo a la derecha aparece la confirmación
+        <i>«📧 Se avisó por correo a …»</i> o, si el correo no salió, el motivo (el acceso queda dado igual).</li>
+    <li>Si le habilitás <b>varios informes seguidos</b> al mismo usuario, le llega <b>un solo correo con la lista</b>.</li>
+    <li>Si cerrás la pestaña enseguida de asignar, el aviso igual sale: lo manda el servidor pasados unos minutos
+        (la «espera de respaldo» de Configuración → Correos).</li>
     <li>Si <b>destildás</b> el informe antes de que salga el aviso, no se manda nada.</li>
     <li><b>No</b> generan correo: quitar un acceso, cambiar una protección o la caducidad, ni volver a marcar un informe
         que ya tenía.</li>
@@ -352,8 +356,9 @@
   <ul class="dots">
     <li><b>Nombre visible del remitente</b> — cómo aparece en la bandeja (por defecto «Equipos Consultores»).</li>
     <li><b>Responder a (Reply-To)</b> — opcional: a dónde llegan las respuestas de los clientes.</li>
-    <li><b>Agrupar avisos (minutos)</b> — cuánto se espera para juntar varios informes habilitados en un solo correo
-        (0 = mandar cada aviso en el momento).</li>
+    <li><b>Espera de respaldo (minutos)</b> — el aviso «Nuevo informe» sale en el momento desde el panel; si el panel
+        no llegó a mandarlo (por ejemplo, se cerró la pestaña enseguida), el servidor lo manda pasado este tiempo.
+        Arriba de «Últimos envíos» se ven los avisos en espera; si alguno lleva demasiado, se marca en rojo.</li>
   </ul>
   <h4>Plantillas</h4>
   <p>Hay tres: <b>Bienvenida</b> (alta de usuario), <b>Restablecer contraseña</b> y <b>Nuevo informe</b>. De cada una

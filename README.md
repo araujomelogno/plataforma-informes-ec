@@ -183,11 +183,13 @@ Sí, siempre que sean recursos inline o URLs absolutas externas. Recursos relati
   falla, el alta igual queda hecha y el enlace se muestra **una sola vez** para copiarlo.
 - **Reenviar acceso** (tabla de usuarios) y **«¿Olvidaste tu contraseña?»** también salen desde
   `notificaciones@`.
-- **Aviso «Nuevo informe»:** cuando un usuario gana acceso a un informe, recibe un correo (agrupado si
-  se le habilitan varios seguidos). Se puede habilitar sin avisar con la casilla
-  «📧 Avisar al usuario por correo».
+- **Aviso «Nuevo informe»:** cuando un usuario gana acceso a un informe, recibe un correo **en el momento**
+  (unos segundos después; uno solo con la lista si se le habilitan varios seguidos), desde Permisos, desde
+  el modal 👥 Usuarios del informe o desde Usuarios → 🔐 Permisos. El admin ve la confirmación en pantalla.
+  Se puede habilitar sin avisar con la casilla «📧 Avisar al usuario por correo». Detalle:
+  [`docs/DESPLIEGUE_aviso_inmediato.md`](docs/DESPLIEGUE_aviso_inmediato.md).
 - **⚙️ Configuración → Correos:** plantillas editables (asunto/cuerpo con variables), remitente,
-  Reply-To, ventana de agrupado, correo de prueba y registro de envíos (`mailLog`, 90 días).
+  Reply-To, espera de respaldo de los avisos, correo de prueba y registro de envíos (`mailLog`, 90 días).
 
 Código en [`functions/`](functions/) (Python 3.11). Despliegue, configuración y pruebas:
 [`docs/DESPLIEGUE_alta_usuarios_correo.md`](docs/DESPLIEGUE_alta_usuarios_correo.md).

@@ -437,8 +437,9 @@ punto. Entre paréntesis, el requisito de la spec.
 
 **Aviso de informe nuevo (R5, R8, R9)**
 
-12. ☐ (R5) Permisos → usuario de prueba → habilitar un informe → a los ~2–3 minutos llega **un** correo «Nuevo
-    material…» con nombre, carpeta y enlace al portal.
+12. ☐ (R5) Permisos → usuario de prueba → habilitar un informe → a los ~5 segundos aparece «📧 Se avisó por correo
+    a …» y llega **un** correo «Nuevo material…» con nombre, carpeta y enlace al portal (cambio posterior: ver
+    `docs/DESPLIEGUE_aviso_inmediato.md`).
 13. ☐ (R5) Hacer lo mismo desde Informes → 👥 Usuarios → llega **un** correo.
 14. ☐ (R5) Quitar el acceso, cambiar una protección o la caducidad, o volver a marcar un informe que ya tenía → no
     llega nada.
