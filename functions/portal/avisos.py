@@ -1,21 +1,29 @@
 """R5/R8/R9 — Aviso por correo cuando un usuario gana acceso a un informe.
 
-Se dispara desde el servidor (trigger de `userAccess/{uid}`), así cubre la
-pestaña Permisos, el modal "Usuarios" del informe y cualquier vía futura.
+Hay dos vías que encolan el mismo aviso, y una sola lo manda:
 
-Flujo:
+1. **En el momento** (`avisar_ahora`, callable `avisarAsignacion`): el panel,
+   después de habilitar informes (desde Permisos, desde el modal "Usuarios"
+   del informe o desde la tabla de usuarios, que lleva a Permisos), espera unos
+   segundos por si se habilitan más y llama a la función, que encola y manda
+   **un solo correo** con la lista en ese momento. El admin ve el resultado.
+2. **Respaldo** (`registrar_cambio`, trigger de `userAccess/{uid}`): por cada
+   id nuevo en `reportIds` encola el aviso. Si el panel no llegó a mandarlo
+   (pestaña cerrada, red caída, cualquier vía futura que no pase por el panel),
+   la función programada `despacharAvisos` lo manda cuando vence la ventana de
+   respaldo (`config/correos.ventanaAgrupadoMin`, 2 min por defecto; con 0 lo
+   manda el mismo trigger).
 
-1. **Trigger** (`registrar_cambio`): compara `reportIds` antes y después. Por
-   cada id nuevo —que no tenga `options[id].notificar == false`— crea
-   `avisosPendientes/{eventId}-{reportId}` con `create()`. Los admins también
-   pueden tener informes asignados ("Mis informes") y reciben el aviso como
-   cualquier usuario si se dejó tildada la casilla (para ellos viene destildada).
-   Si el documento ya existe, el trigger es un reintento del mismo cambio y no
-   se vuelve a encolar: así un reintento no duplica correos.
-2. **Despacho** (`despachar`): junta los pendientes de cada usuario y, cuando
-   pasó la ventana de agrupado sin novedades, manda **un solo correo** con la
-   lista. Lo corre una función programada cada minuto; con ventana 0 lo corre
-   el mismo trigger, en el momento.
+**Sin duplicados:** las dos vías encolan con el mismo id,
+`avisosPendientes/{uid}-{reportId}-{grantedAt}` (la fecha de la asignación que
+graba el panel), con `create()`, que falla si ya existe. Y el despacho reclama
+los pendientes en una transacción: si el panel y la función programada miran
+el mismo grupo a la vez, solo uno lo manda.
+
+Se respeta `options[id].notificar == false` (casilla "Avisar al usuario por
+correo" destildada). Los admins también pueden tener informes asignados ("Mis
+informes") y reciben el aviso si se dejó tildada la casilla (para ellos viene
+destildada).
 
 Al despachar se vuelve a leer `userAccess/{uid}`: si el admin destildó el
 informe antes del envío, ese informe no se avisa (y si no queda ninguno, no
@@ -74,11 +82,47 @@ def _quiere_aviso(opciones, rid):
 _MINIMO = datetime.datetime.min.replace(tzinfo=datetime.timezone.utc)
 
 
-# ── 1. Trigger ───────────────────────────────────────────────────────
+def clave_aviso(uid, rid, opciones, respaldo=None):
+    """Id del aviso en la cola: el mismo para el panel y para el trigger.
+
+    Sale de la fecha de la asignación (`options[rid].grantedAt`, que el panel
+    graba en cada asignación): volver a asignar más tarde es otra asignación
+    (otro aviso), pero las dos vías que ven la misma asignación coinciden.
+    Sin `grantedAt` (asignaciones escritas por otra vía) se usa `respaldo`.
+    """
+    granted = str(((opciones or {}).get(rid) or {}).get("grantedAt") or "").strip()
+    if granted:
+        limpio = "".join(c if c.isalnum() else "_" for c in granted)[:40]
+        return f"{uid}-{rid}-{limpio}"
+    return respaldo or f"{uid}-{rid}"
+
+
+def _encolar(db, uid, rid, opciones, origen, ahora, event_id=None):
+    """Crea el aviso pendiente. False si ya estaba (otra vía o un reintento)."""
+    clave = clave_aviso(uid, rid, opciones,
+                        respaldo=f"{event_id}-{rid}" if event_id else None)
+    try:
+        db.collection(COLECCION).document(clave).create({
+            "uid": uid,
+            "reportId": rid,
+            "eventId": event_id,
+            "origen": origen,
+            "estado": PENDIENTE,
+            "grantedByEmail": ((opciones or {}).get(rid) or {}).get("grantedByEmail"),
+            "creadoEn": ahora,
+            "expiraEn": ahora + datetime.timedelta(days=config.DIAS_DE_REGISTRO),
+        })
+    except gexc.AlreadyExists:
+        return False
+    return True
+
+
+# ── 1. Trigger (respaldo) ────────────────────────────────────────────
 
 def registrar_cambio(db, mailer, event_id, uid, antes, despues, ahora=None):
     """Encola los avisos de un cambio en `userAccess/{uid}`. Devuelve la lista
-    de `reportId` encolados (vacía si no hay nada que avisar)."""
+    de `reportId` encolados (vacía si no hay nada que avisar o si el panel ya
+    los había encolado)."""
     nuevos = ids_nuevos(antes, despues)
     if not nuevos:
         return []
@@ -91,22 +135,8 @@ def registrar_cambio(db, mailer, event_id, uid, antes, despues, ahora=None):
         return []
 
     ahora = ahora or _ahora()
-    encolados = []
-    for rid in nuevos:
-        ref = db.collection(COLECCION).document(f"{event_id}-{rid}")
-        try:
-            ref.create({
-                "uid": uid,
-                "reportId": rid,
-                "eventId": event_id,
-                "estado": PENDIENTE,
-                "grantedByEmail": (opciones.get(rid) or {}).get("grantedByEmail"),
-                "creadoEn": ahora,
-                "expiraEn": ahora + datetime.timedelta(days=config.DIAS_DE_REGISTRO),
-            })
-        except gexc.AlreadyExists:
-            continue  # reintento del mismo evento: ya estaba encolado
-        encolados.append(rid)
+    encolados = [rid for rid in nuevos
+                 if _encolar(db, uid, rid, opciones, "trigger", ahora, event_id)]
 
     if encolados:
         cfg = envio.leer_config(db)
@@ -238,7 +268,7 @@ def _despachar_grupo(db, mailer, uid, items, config_correos):
 
     if not ficha or not ficha.get("email"):
         _cerrar(items, correo.OMITIDO, motivo="Usuario inexistente o sin email.")
-        return {"uid": uid, "estado": correo.OMITIDO}
+        return {"uid": uid, "estado": correo.OMITIDO, "detalle": "El usuario no existe o no tiene email."}
 
     ids, vistos = [], set()
     for _, datos in sorted(items, key=lambda x: x[1].get("creadoEn") or _MINIMO):
@@ -259,12 +289,13 @@ def _despachar_grupo(db, mailer, uid, items, config_correos):
             disparado_por=disparado_por, uid=uid,
             reportIds=sorted(vistos))
         _cerrar(items, correo.OMITIDO, mailLogId=log_id)
-        return {"uid": uid, "estado": correo.OMITIDO}
+        return {"uid": uid, "estado": correo.OMITIDO, "email": email,
+                "detalle": "El acceso se quitó o se marcó «no avisar» antes del envío."}
 
     informes, valores = _valores(db, uid, email, ids, opciones, items)
     if not informes:
         _cerrar(items, correo.OMITIDO, motivo="Los informes ya no existen.")
-        return {"uid": uid, "estado": correo.OMITIDO}
+        return {"uid": uid, "estado": correo.OMITIDO, "detalle": "Los informes ya no existen."}
 
     resultado = envio.enviar_plantilla(
         db, mailer, plantillas.NUEVO_INFORME, email, valores, disparado_por,
@@ -272,7 +303,8 @@ def _despachar_grupo(db, mailer, uid, items, config_correos):
         reportId=informes[0]["id"] if len(informes) == 1 else None,
         reportIds=[i["id"] for i in informes])
     _cerrar(items, resultado["estado"], mailLogId=resultado["logId"])
-    return {"uid": uid, "estado": resultado["estado"],
+    return {"uid": uid, "estado": resultado["estado"], "email": email,
+            "detalle": resultado["detalle"],
             "informes": [i["id"] for i in informes]}
 
 
@@ -300,3 +332,35 @@ def despachar(db, mailer, ahora=None, uid=None, forzar=False, config_correos=Non
             _cerrar(tomados, correo.FALLIDO,
                     motivo=f"Error al preparar el aviso: {type(error).__name__}")
     return resumen
+
+
+# ── 3. En el momento (panel → callable avisarAsignacion) ─────────────
+
+def avisar_ahora(db, mailer, uid, report_ids, ahora=None):
+    """Encola los informes recién habilitados a `uid` y manda el aviso ya.
+
+    Solo considera los que siguen asignados y no tienen «no avisar». Devuelve
+    `{estado, detalle, informes, email}`; `estado` es `enviado`, `fallido`,
+    `omitido`, `sin_aviso` (nada que avisar) o `ya_enviado` (otra vía lo mandó
+    o lo está mandando: no se repite).
+    """
+    ahora = ahora or _ahora()
+    acceso_snap = db.collection("userAccess").document(uid).get()
+    acceso = (acceso_snap.to_dict() or {}) if acceso_snap.exists else {}
+    vigentes = set(acceso.get("reportIds") or [])
+    opciones = acceso.get("options") or {}
+    pedidos = [rid for rid in dict.fromkeys(report_ids or [])
+               if rid in vigentes and _quiere_aviso(opciones, rid)]
+    if not pedidos:
+        return {"estado": "sin_aviso", "informes": [],
+                "detalle": "No hay informes nuevos para avisar."}
+    if not db.collection("users").document(uid).get().exists:
+        return {"estado": "sin_aviso", "informes": [],
+                "detalle": "El usuario no existe."}
+    for rid in pedidos:
+        _encolar(db, uid, rid, opciones, "panel", ahora)
+    resumen = despachar(db, mailer, ahora=ahora, uid=uid, forzar=True)
+    if not resumen:
+        return {"estado": "ya_enviado", "informes": pedidos,
+                "detalle": "El aviso ya se había enviado (o se está enviando)."}
+    return resumen[0]

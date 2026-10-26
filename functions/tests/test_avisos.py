@@ -155,3 +155,73 @@ def test_un_fallo_de_envio_no_revierte_el_permiso(entorno):
     assert db.collection("userAccess").document("u1").get().to_dict()["reportIds"] == ["r1"]
     [fila] = [d.to_dict() for d in db.collection("mailLog").stream()]
     assert fila["estado"] == "fallido" and fila["intentos"] == 3
+
+
+# ── Aviso en el momento (panel → avisarAsignacion) ──
+
+def _acceso_con_fecha(db, ids, granted="2026-10-26T12:00:00.000Z", notificar=True):
+    opciones = {r: {"grantedByEmail": "admin@equipos.com.uy", "grantedAt": granted,
+                    "notificar": notificar} for r in ids}
+    datos = {"reportIds": ids, "options": opciones}
+    db.collection("userAccess").document("u1").set(datos)
+    return datos
+
+
+def test_panel_manda_en_el_momento_y_el_trigger_no_duplica(entorno, mailer):
+    db, _ = entorno
+    _base(db)
+    despues = _acceso_con_fecha(db, ["r1", "r2"])
+    r = avisos.avisar_ahora(db, mailer, "u1", ["r1", "r2"], ahora=T0)
+    assert r["estado"] == "enviado" and sorted(r["informes"]) == ["r1", "r2"]
+    [m] = mailer.enviados
+    assert "• Informe 1" in m["texto"] and "• Informe 2" in m["texto"]
+    # El trigger llega después (mismo grantedAt → mismo id): no encola ni manda.
+    assert avisos.registrar_cambio(db, mailer, "ev9", "u1", {}, despues, ahora=T0) == []
+    avisos.despachar(db, mailer, ahora=T0 + datetime.timedelta(hours=1))
+    assert len(mailer.enviados) == 1
+    # Llamar de nuevo desde el panel tampoco repite.
+    assert avisos.avisar_ahora(db, mailer, "u1", ["r1"], ahora=T0)["estado"] == "ya_enviado"
+    assert len(mailer.enviados) == 1
+
+
+def test_trigger_primero_y_panel_despues_un_solo_correo(entorno, mailer):
+    db, _ = entorno
+    _base(db)
+    despues = _acceso_con_fecha(db, ["r1"])
+    assert avisos.registrar_cambio(db, mailer, "ev1", "u1", {}, despues, ahora=T0) == ["r1"]
+    r = avisos.avisar_ahora(db, mailer, "u1", ["r1"], ahora=T0)
+    assert r["estado"] == "enviado"
+    avisos.despachar(db, mailer, ahora=T0 + datetime.timedelta(hours=1))
+    assert len(mailer.enviados) == 1
+
+
+def test_reasignar_mas_tarde_es_otro_aviso(entorno, mailer):
+    db, _ = entorno
+    _base(db)
+    _acceso_con_fecha(db, ["r1"], granted="2026-10-26T12:00:00.000Z")
+    avisos.avisar_ahora(db, mailer, "u1", ["r1"], ahora=T0)
+    _acceso_con_fecha(db, ["r1"], granted="2026-10-27T09:00:00.000Z")
+    avisos.avisar_ahora(db, mailer, "u1", ["r1"], ahora=T0)
+    assert len(mailer.enviados) == 2
+
+
+def test_panel_respeta_no_avisar_y_accesos_quitados(entorno, mailer):
+    db, _ = entorno
+    _base(db)
+    _acceso_con_fecha(db, ["r1"], notificar=False)
+    assert avisos.avisar_ahora(db, mailer, "u1", ["r1"])["estado"] == "sin_aviso"
+    _acceso_con_fecha(db, [])
+    assert avisos.avisar_ahora(db, mailer, "u1", ["r1"])["estado"] == "sin_aviso"
+    assert mailer.enviados == []
+    assert list(db.collection("mailLog").stream()) == []
+
+
+def test_panel_con_smtp_caido_informa_fallido(entorno):
+    from portal import correo
+    from tests.conftest import MailerFalso
+    db, _ = entorno
+    _base(db)
+    _acceso_con_fecha(db, ["r1"])
+    r = avisos.avisar_ahora(db, MailerFalso(error=correo.ErrorEnvio("caído", True, 3)), "u1", ["r1"])
+    assert r["estado"] == "fallido" and r["detalle"] == "caído"
+    assert db.collection("userAccess").document("u1").get().to_dict()["reportIds"] == ["r1"]

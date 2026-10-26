@@ -716,6 +716,13 @@
     }
     .notify-toggle input { width: auto; margin: 0; accent-color: var(--orange); }
 
+    /* Avisos breves en pantalla (resultado del correo al asignar un informe) */
+    #toast-box { position: fixed; right: 1rem; bottom: 1rem; z-index: 300; display: flex; flex-direction: column; gap: .5rem; max-width: min(420px, calc(100vw - 2rem)); }
+    .toast { padding: .75rem 1rem; border-radius: 4px; font-size: .8rem; font-weight: 600; box-shadow: 0 6px 24px rgba(0,0,0,.18); cursor: pointer; line-height: 1.45; }
+    .toast-ok    { background: #EAF5EA; color: #1E5B24; border-left: 3px solid #2E7D32; }
+    .toast-info  { background: var(--white); color: var(--dark); border-left: 3px solid var(--gray); }
+    .toast-error { background: #FEF0EF; color: #8B1A0A; border-left: 3px solid #B83A26; }
+
     /* Configuración → Correos */
     textarea.ftextarea {
       width: 100%; padding: 0.75rem 1rem; border: 1.5px solid var(--border); border-radius: 3px;
@@ -3332,7 +3339,65 @@ async function grantReportToUser(userId, reportId, grant, notificar = true) {
     ids = ids.filter(x => x !== reportId);
   }
   await db.collection('userAccess').doc(userId).set({ reportIds: ids, options }, { merge: true });
+  // Aviso por correo en el momento (los tres caminos —Permisos, modal del
+  // informe y Usuarios → Permisos— pasan por acá).
+  if (grant && notificar !== false) queueAssignmentNotice(userId, reportId);
+  else if (!grant) dequeueAssignmentNotice(userId, reportId);
   return options;
+}
+
+// ── Aviso «Nuevo informe» en el momento ──
+// Se esperan unos segundos por si el admin habilita más informes al mismo
+// usuario (así le llega UN correo con la lista) y se llama a la Cloud Function
+// avisarAsignacion, que lo manda y devuelve el resultado. El trigger de
+// userAccess queda de respaldo (si se cierra la pestaña antes, lo manda el
+// servidor a los pocos minutos) y nunca duplica: los dos usan el mismo id.
+const NOTICE_DEBOUNCE_MS = 4000;
+const _noticeQueue = {};   // { uid: { ids: Set, timer } }
+function queueAssignmentNotice(uid, reportId) {
+  const q = _noticeQueue[uid] || (_noticeQueue[uid] = { ids: new Set(), timer: null });
+  q.ids.add(reportId);
+  clearTimeout(q.timer);
+  q.timer = setTimeout(() => flushAssignmentNotice(uid), NOTICE_DEBOUNCE_MS);
+}
+function dequeueAssignmentNotice(uid, reportId) {
+  const q = _noticeQueue[uid]; if (!q) return;
+  q.ids.delete(reportId);
+  if (!q.ids.size) { clearTimeout(q.timer); delete _noticeQueue[uid]; }
+}
+async function flushAssignmentNotice(uid) {
+  const q = _noticeQueue[uid]; if (!q) return;
+  delete _noticeQueue[uid];
+  clearTimeout(q.timer);
+  const reportIds = [...q.ids];
+  if (!reportIds.length) return;
+  const u = allUsers.find(x => x.id === uid);
+  const who = (u && u.email) || 'el usuario';
+  try {
+    const r = await callFn('avisarAsignacion', { uid, reportIds });
+    const n = (r.informes || reportIds).length;
+    const what = n === 1 ? 'el informe' : `${n} informes`;
+    if (r.estado === 'enviado') showToast(`📧 Se avisó por correo a ${who} (${what}).`, 'ok');
+    else if (r.estado === 'fallido') showToast(`⚠️ El acceso quedó dado, pero el correo a ${who} no salió: ${String(r.detalle || 'motivo desconocido').replace(/\.$/, '')}. Ver Configuración → Correos.`, 'error', 12000);
+    else if (r.estado === 'omitido') showToast(`ℹ️ No se envió el aviso a ${who}: ${r.detalle || 'omitido'}`, 'info');
+    // 'ya_enviado' / 'sin_aviso': nada que mostrar.
+  } catch (err) {
+    showToast(`⚠️ El acceso quedó dado, pero no se pudo enviar el aviso a ${who} ahora (${fnErrorMsg(err)}). El servidor lo reintenta en unos minutos.`, 'error', 12000);
+  }
+}
+// Si el admin se va antes de que venza la espera, mandamos lo pendiente ya.
+function flushAllAssignmentNotices() { Object.keys(_noticeQueue).forEach(flushAssignmentNotice); }
+document.addEventListener('visibilitychange', () => { if (document.hidden) flushAllAssignmentNotices(); });
+
+function showToast(text, kind = 'info', ms = 6000) {
+  let box = el('toast-box');
+  if (!box) { box = document.createElement('div'); box.id = 'toast-box'; document.body.appendChild(box); }
+  const t = document.createElement('div');
+  t.className = 'toast toast-' + kind;
+  t.textContent = text;
+  t.onclick = () => t.remove();
+  box.appendChild(t);
+  setTimeout(() => t.remove(), ms);
 }
 
 async function togglePerm(userId, reportId, cb) {
@@ -4459,13 +4524,15 @@ function renderMailGeneral() {
         <input type="email" id="cfg-replyto" placeholder="equipo@equipos.com.uy" value="${esc(c.replyTo || '')}" />
       </div>
       <div class="form-group" style="margin:0">
-        <label>Agrupar avisos (minutos)</label>
+        <label>Espera de respaldo (minutos)</label>
         <input type="number" class="fnumber" id="cfg-ventana" min="0" max="60" step="1" value="${esc(ventana)}" />
       </div>
     </div>
     <p style="font-size:.74rem;color:var(--gray);font-weight:500;margin:.7rem 0 0;line-height:1.5">
-      💡 <strong>Agrupar avisos:</strong> si a un usuario se le habilitan varios informes seguidos, le llega
-      un solo correo con la lista cuando pasan estos minutos sin nuevos cambios (0 = mandar cada aviso en el momento).
+      💡 El aviso «Nuevo informe» sale <strong>en el momento</strong> desde el panel (si habilitás varios informes
+      seguidos al mismo usuario, unos segundos después le llega un solo correo con la lista). Estos minutos son la
+      <strong>espera de respaldo</strong>: si el panel no llegó a mandarlo (por ejemplo, cerraste la pestaña enseguida),
+      el servidor lo manda pasado este tiempo (0 = el servidor también lo manda en el momento).
     </p>
     <div class="tpl-actions"><button class="btn btn-orange btn-sm" onclick="saveMailGeneral()">💾 Guardar</button></div>`;
 }
@@ -4694,6 +4761,23 @@ async function refreshMailLog() {
   loadMailLog();
 }
 
+// Diagnóstico: avisos «Nuevo informe» encolados que nadie mandó. Si el más
+// viejo lleva más que la espera de respaldo (+3 min de margen), la función
+// programada despacharAvisos no está corriendo en el servidor.
+async function checkPendingNotices() {
+  const q = el('maillog-quota'); if (!q) return;
+  try {
+    const snap = await db.collection('avisosPendientes').where('estado', '==', 'pendiente').limit(200).get();
+    const old = snap.docs.map(d => d.data().creadoEn).filter(t => t && t.toMillis).map(t => t.toMillis());
+    if (!old.length) return;
+    const ventana = (_mailCfg && Number.isInteger(_mailCfg.ventanaAgrupadoMin)) ? _mailCfg.ventanaAgrupadoMin : 2;
+    const mins = Math.round((Date.now() - Math.min(...old)) / 60000);
+    const stuck = mins > ventana + 3;
+    q.insertAdjacentHTML('beforeend', ` · <span style="color:${stuck ? '#B83A26' : 'inherit'}">⏳ Avisos en espera: <strong>${snap.size}</strong>` +
+      (stuck ? ` (el más viejo hace ${mins} min: la función <code>despacharAvisos</code> no parece estar corriendo — ver la guía de despliegue)` : '') + `</span>`);
+  } catch (e) { /* sin permiso o sin datos: no se muestra */ }
+}
+
 // Registro de envíos (mailLog): últimos 100, filtrables por estado, y el
 // contador de las últimas 24 h contra el cupo diario de este portal.
 async function loadMailLog() {
@@ -4703,6 +4787,7 @@ async function loadMailLog() {
     q.innerHTML = _mailInfo.enviados24h == null ? '📬 Últimas 24 h: — (no se pudo contar)' :
       `📬 Últimas 24 h: <strong>${_mailInfo.enviados24h}</strong> enviados · cupo diario de este portal: ${_mailInfo.cupoDiario} · disponibles: <strong>${_mailInfo.disponible}</strong>`;
   }
+  checkPendingNotices();
   cont.innerHTML = '<div class="loading">Cargando envíos…</div>';
   try {
     const f = el('maillog-filter') ? el('maillog-filter').value : '';

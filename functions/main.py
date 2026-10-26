@@ -11,10 +11,12 @@ Funciones:
   al admin que lo pide (R10).
 - `solicitarRestablecimiento` (callable, público) — "¿Olvidaste tu
   contraseña?" por Workspace; responde igual exista o no la cuenta (R11).
-- `notificarAcceso` (trigger de `userAccess/{uid}`) — aviso "Nuevo informe"
-  (R5, R8, R9).
-- `despacharAvisos` (programada, cada minuto) — manda los avisos agrupados
-  cuando vence la ventana de agrupado (R9).
+- `avisarAsignacion` (callable, solo admin) — el panel la llama al habilitar
+  informes: manda el aviso "Nuevo informe" en el momento (R5, R8, R9).
+- `notificarAcceso` (trigger de `userAccess/{uid}`) — respaldo: encola el
+  aviso si el panel no llegó a mandarlo (mismo id: no duplica).
+- `despacharAvisos` (programada, cada minuto) — manda los avisos de respaldo
+  cuando vence la ventana.
 
 Ver `docs/DESPLIEGUE_alta_usuarios_correo.md`.
 """
@@ -126,6 +128,23 @@ def solicitarRestablecimiento(req: https_fn.CallableRequest) -> dict:  # noqa: N
     # respuesta es siempre la misma y hay un tope de pedidos por dirección.
     return accesos.solicitar_restablecimiento(_db(), _cuentas(), _mailer(),
                                               _datos(req).get("email"))
+
+
+@https_fn.on_call(secrets=SECRETOS, timeout_sec=60)
+def avisarAsignacion(req: https_fn.CallableRequest) -> dict:  # noqa: N802
+    """El panel la llama después de habilitar informes: manda el aviso «Nuevo
+    informe» en el momento (el trigger queda de respaldo, sin duplicar)."""
+    db = _db()
+    datos = _datos(req)
+    try:
+        accesos.exigir_admin(db, req.auth)
+        uid = str(datos.get("uid") or "").strip()
+        ids = datos.get("reportIds") or []
+        if not uid or not isinstance(ids, list) or not ids:
+            raise accesos.ErrorPortal("invalid-argument", "Faltan uid o reportIds.")
+        return avisos.avisar_ahora(db, _mailer(), uid, [str(x) for x in ids][:200])
+    except accesos.ErrorPortal as error:
+        raise _error(error)
 
 
 @firestore_fn.on_document_written(document="userAccess/{uid}",
