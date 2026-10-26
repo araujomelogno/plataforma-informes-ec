@@ -82,6 +82,27 @@ No cambian reglas de Firestore, índices ni secretos.
 5. Si en «Últimos envíos» los avisos figuran **fallidos**, el problema es el SMTP (motivo en la fila). Ver la guía
    `DESPLIEGUE_alta_usuarios_correo.md` §12.
 
+## ⚠️ Antes de desplegar funciones: vaciar los avisos trabados
+
+Si «⏳ Avisos en espera» muestra avisos viejos (por ejemplo, 68 con el más viejo de hace días), **no hay que
+mandarlos**: avisar días después de una asignación confunde. Con versiones anteriores a este cambio, desplegar las
+funciones los habría enviado todos de golpe.
+
+Hay que vaciar la cola **antes** de `firebase deploy --only functions`. Borrarla no cambia ningún acceso: solo hace
+que esos correos no salgan. Cualquiera de estas opciones sirve:
+
+```bash
+firebase firestore:delete avisosPendientes --recursive --project portal-informes-ec
+```
+
+o Firebase Console → Firestore → `avisosPendientes` → ⋮ → **Delete collection**.
+
+Ya desplegado este cambio, además:
+
+- los avisos con más de **60 minutos** en espera **vencen**: se cierran como `vencido` sin enviarse, ni por la
+  función programada ni sumados al correo de un informe nuevo;
+- en Configuración → Correos, junto a «⏳ Avisos en espera», está el botón **«🗑 Descartar sin enviar»**.
+
 ## Despliegue
 
 Desde la raíz del repo, con `main` actualizado (PR mergeado):

@@ -49,6 +49,12 @@ PROCESANDO = "procesando"
 VENTANA_POR_DEFECTO_MIN = 2
 # Aunque el admin siga habilitando informes, el aviso no espera más que esto.
 MULTIPLO_ESPERA_MAXIMA = 5
+# Un aviso que lleva más que esto sin salir (por ejemplo, porque la función
+# programada estuvo caída) ya no se manda: avisar días después de una
+# asignación confunde más de lo que ayuda. Se cierra como «vencido».
+VENCIMIENTO_MIN = 60
+VENCIDO = "vencido"
+DESCARTADO = "descartado"
 
 
 def _ahora():
@@ -314,10 +320,25 @@ def despachar(db, mailer, ahora=None, uid=None, forzar=False, config_correos=Non
     if config_correos is None:
         config_correos = envio.leer_config(db)
     ventana = ventana_min(config_correos)
+    limite = ahora - datetime.timedelta(
+        minutes=max(VENCIMIENTO_MIN, ventana * MULTIPLO_ESPERA_MAXIMA + 10))
     resumen = []
     for usuario, items in _pendientes(db, uid).items():
         if not usuario:
             continue
+        viejos = [(r, d) for r, d in items if (d.get("creadoEn") or ahora) < limite]
+        if viejos:
+            # Vencidos: se cierran sin mandar nada (ni en el envío en el momento
+            # del panel, que si no los sumaría al correo de un informe nuevo).
+            tomados = _reclamar(db, [r for r, _ in viejos])
+            _cerrar(tomados, VENCIDO,
+                    motivo="No se envió: el aviso venció sin salir (más de "
+                           f"{VENCIMIENTO_MIN} min en espera).")
+            if tomados:
+                print(f"[avisos] {len(tomados)} aviso(s) vencido(s) de {usuario}: no se envían.")
+            items = [(r, d) for r, d in items if (d.get("creadoEn") or ahora) >= limite]
+            if not items:
+                continue
         if not forzar and not listo_para_enviar(items, ahora, ventana):
             continue
         tomados = _reclamar(db, [ref for ref, _ in items])
@@ -364,3 +385,16 @@ def avisar_ahora(db, mailer, uid, report_ids, ahora=None):
         return {"estado": "ya_enviado", "informes": pedidos,
                 "detalle": "El aviso ya se había enviado (o se está enviando)."}
     return resumen[0]
+
+
+# ── 4. Descartar la cola (Configuración → Correos) ───────────────────
+
+def descartar_pendientes(db, actor):
+    """Cierra sin enviar todos los avisos en espera. Devuelve cuántos."""
+    pendientes = [ref for items in _pendientes(db).values() for ref, _ in items]
+    tomados = []
+    for i in range(0, len(pendientes), 100):
+        tomados += _reclamar(db, pendientes[i:i + 100])
+    _cerrar(tomados, DESCARTADO,
+            motivo=f"Descartado sin enviar por {actor.get('email') or actor.get('uid')}.")
+    return {"descartados": len(tomados)}
