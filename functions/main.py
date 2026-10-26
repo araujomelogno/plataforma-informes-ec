@@ -15,6 +15,8 @@ Funciones:
   informes: manda el aviso "Nuevo informe" en el momento (R5, R8, R9).
 - `notificarAcceso` (trigger de `userAccess/{uid}`) — respaldo: encola el
   aviso si el panel no llegó a mandarlo (mismo id: no duplica).
+- `descartarAvisos` (callable, solo admin) — cierra sin enviar los avisos en
+  espera (Configuración → Correos).
 - `despacharAvisos` (programada, cada minuto) — manda los avisos de respaldo
   cuando vence la ventana.
 
@@ -143,6 +145,17 @@ def avisarAsignacion(req: https_fn.CallableRequest) -> dict:  # noqa: N802
         if not uid or not isinstance(ids, list) or not ids:
             raise accesos.ErrorPortal("invalid-argument", "Faltan uid o reportIds.")
         return avisos.avisar_ahora(db, _mailer(), uid, [str(x) for x in ids][:200])
+    except accesos.ErrorPortal as error:
+        raise _error(error)
+
+
+@https_fn.on_call(timeout_sec=120)
+def descartarAvisos(req: https_fn.CallableRequest) -> dict:  # noqa: N802
+    """Configuración → Correos: cierra sin enviar los avisos en espera."""
+    db = _db()
+    try:
+        actor = accesos.exigir_admin(db, req.auth)
+        return avisos.descartar_pendientes(db, actor)
     except accesos.ErrorPortal as error:
         raise _error(error)
 

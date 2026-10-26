@@ -225,3 +225,45 @@ def test_panel_con_smtp_caido_informa_fallido(entorno):
     r = avisos.avisar_ahora(db, MailerFalso(error=correo.ErrorEnvio("caído", True, 3)), "u1", ["r1"])
     assert r["estado"] == "fallido" and r["detalle"] == "caído"
     assert db.collection("userAccess").document("u1").get().to_dict()["reportIds"] == ["r1"]
+
+
+# ── Avisos vencidos y descarte ──
+
+def test_avisos_viejos_vencen_y_no_se_suman_a_uno_nuevo(entorno, mailer):
+    db, _ = entorno
+    _base(db)
+    viejo = _acceso_con_fecha(db, ["r1"], granted="2026-10-20T12:00:00.000Z")
+    # Encolado hace 4 días por el trigger y nunca enviado (programada caída).
+    avisos.registrar_cambio(db, mailer, "ev1", "u1", {}, viejo,
+                            ahora=T0 - datetime.timedelta(days=4))
+    # Hoy se le asigna otro informe desde el panel: el correo NO incluye r1.
+    db.collection("userAccess").document("u1").update({
+        "reportIds": ["r1", "r2"],
+        "options.r2": {"grantedAt": "2026-10-26T12:00:00.000Z", "notificar": True}})
+    r = avisos.avisar_ahora(db, mailer, "u1", ["r2"], ahora=T0)
+    assert r["estado"] == "enviado" and r["informes"] == ["r2"]
+    [m] = mailer.enviados
+    assert "Informe 1" not in m["texto"]
+    estados = {d.to_dict()["reportId"]: d.to_dict()["estado"]
+               for d in db.collection("avisosPendientes").stream()}
+    assert estados == {"r1": "vencido", "r2": "enviado"}
+
+
+def test_la_programada_no_manda_avisos_vencidos(entorno, mailer):
+    db, _ = entorno
+    _base(db)
+    viejo = _acceso_con_fecha(db, ["r1", "r2"])
+    avisos.registrar_cambio(db, mailer, "ev1", "u1", {}, viejo,
+                            ahora=T0 - datetime.timedelta(days=4))
+    assert avisos.despachar(db, mailer, ahora=T0) == []
+    assert mailer.enviados == []
+
+
+def test_descartar_pendientes(entorno, mailer):
+    db, _ = entorno
+    _base(db)
+    avisos.registrar_cambio(db, mailer, "ev1", "u1", {}, _acceso(db, ["r1", "r2"]), ahora=T0)
+    assert avisos.descartar_pendientes(db, {"uid": "a", "email": "admin@e.com"}) == {"descartados": 2}
+    avisos.despachar(db, mailer, ahora=T0 + datetime.timedelta(minutes=5))
+    assert mailer.enviados == []
+    assert db.collection("userAccess").document("u1").get().to_dict()["reportIds"] == ["r1", "r2"]

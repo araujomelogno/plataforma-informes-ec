@@ -4774,8 +4774,24 @@ async function checkPendingNotices() {
     const mins = Math.round((Date.now() - Math.min(...old)) / 60000);
     const stuck = mins > ventana + 3;
     q.insertAdjacentHTML('beforeend', ` · <span style="color:${stuck ? '#B83A26' : 'inherit'}">⏳ Avisos en espera: <strong>${snap.size}</strong>` +
-      (stuck ? ` (el más viejo hace ${mins} min: la función <code>despacharAvisos</code> no parece estar corriendo — ver la guía de despliegue)` : '') + `</span>`);
+      (stuck ? ` (el más viejo hace ${mins} min: la función <code>despacharAvisos</code> no parece estar corriendo — ver la guía de despliegue)` : '') + `</span>` +
+      ` <button class="btn btn-outline btn-sm" style="margin-left:.4rem" onclick="discardPendingNotices(this)">🗑 Descartar sin enviar</button>`);
   } catch (e) { /* sin permiso o sin datos: no se muestra */ }
+}
+
+// Cierra sin enviar todos los avisos «Nuevo informe» en espera (por ejemplo,
+// los que quedaron trabados mientras la función programada no corría).
+async function discardPendingNotices(btn) {
+  if (!confirm('¿Descartar todos los avisos «Nuevo informe» en espera?\n\nNo se envía ninguno de esos correos. Los accesos a los informes NO cambian.')) return;
+  if (btn) btn.disabled = true;
+  try {
+    const r = await callFn('descartarAvisos');
+    showToast(`🗑 Se descartaron ${r.descartados} aviso(s) en espera. No se envió ninguno.`, 'ok');
+    refreshMailLog();
+  } catch (err) {
+    if (btn) btn.disabled = false;
+    showToast('❌ No se pudieron descartar: ' + fnErrorMsg(err) + '. Alternativa: borrar la colección avisosPendientes en Firebase Console → Firestore.', 'error', 12000);
+  }
 }
 
 // Registro de envíos (mailLog): últimos 100, filtrables por estado, y el
