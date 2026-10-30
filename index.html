@@ -2445,6 +2445,7 @@ async function previewReport(storagePath, name) {
 // el CORS del bucket ya configurado (el mismo que usa el visor). Si falla el fetch
 // (p.ej. CORS), abre la URL directamente como último recurso.
 async function downloadBlobUrl(url, name) {
+  url = freshUrl(url);   // evita bajar una versión vieja desde la caché
   try {
     const resp = await fetch(url);
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
@@ -3806,7 +3807,16 @@ function hideLoadingOverlay() {
 ══════════════════════════════════════ */
 let _viewerCleanup = null;
 
+// Al "Reescribir" un informe su URL de Storage puede quedar igual, y el navegador
+// seguía mostrando la copia vieja de su caché (había que borrar los datos de
+// navegación). Un parámetro distinto en cada apertura obliga a pedir el contenido
+// actual; Storage ignora los parámetros que no conoce.
+function freshUrl(url) {
+  return url + (url.includes('?') ? '&' : '?') + 'v=' + Date.now();
+}
+
 async function openViewer(url, name, opts, viewerEmail, reportId) {
+  url = freshUrl(url);
   opts = mergeOpts(opts);
   const ext = extOf(name);
   const kind = fileKind(name);
