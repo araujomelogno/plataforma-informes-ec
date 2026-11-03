@@ -427,6 +427,22 @@
     .upload-zone p { font-size: 0.85rem; color: var(--gray); font-weight: 500; }
     .upload-zone p strong { color: var(--orange); font-weight: 700; }
     .upload-zone .hint { font-size: 0.74rem; margin-top: 0.35rem; color: #ABABAB; font-weight: 500; }
+    .upload-zone.blocked { opacity: .45; cursor: not-allowed; }
+    .upload-zone.blocked:hover { border-color: var(--border); background: var(--gray-xlight); }
+
+    /* Encriptación con clave (subida) */
+    .enc-box { margin: 0 0 1rem; }
+    .enc-row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; margin-top: .6rem; }
+    .enc-row input { flex: 1 1 200px; min-width: 0; width: auto; }
+    .enc-hint { font-size: .74rem; color: var(--gray); font-weight: 500; margin: .45rem 0 0; }
+    .enc-hint.bad { color: #B83A26; }
+    .enc-hint.ok  { color: #2E7D32; }
+    .enc-tag { font-size: .85em; margin-left: .25rem; }
+    .gpg-help { margin-top: .8rem; font-size: .78rem; color: var(--gray); font-weight: 500; }
+    .gpg-help summary { cursor: pointer; font-weight: 600; color: var(--dark); }
+    .gpg-help p { margin: .45rem 0 .25rem; }
+    .gpg-help code { display: block; padding: .45rem .6rem; background: var(--gray-xlight); border: 1px solid var(--border); border-radius: 4px; word-break: break-all; user-select: all; }
+    .gpg-help p code { display: inline; padding: .1rem .3rem; }
 
     .progress-wrap { margin-top: 1.1rem; }
     .progress-meta {
@@ -910,8 +926,25 @@
               <label>Subir a la carpeta</label>
               <select id="upload-folder-select" class="fselect"><option value="">— Raíz —</option></select>
             </div>
+            <!-- Encriptación opcional: el archivo se cifra en el navegador antes de subirlo -->
+            <div class="enc-box">
+              <label class="notify-toggle" style="margin:0" title="El archivo se cifra en tu navegador antes de subirlo y solo se ve ingresando la clave. No disponible para video (se descifra entero en memoria) ni para archivos de más de 100 MB.">
+                <input type="checkbox" id="enc-toggle" onchange="onEncryptToggle()" />
+                <span>🔒 Encriptar con clave</span>
+              </label>
+              <div id="enc-fields" class="hidden">
+                <div class="enc-row">
+                  <input type="password" id="enc-pass" placeholder="Clave (mínimo 10 caracteres)" autocomplete="new-password" oninput="refreshEncryptState()" />
+                  <input type="password" id="enc-pass2" placeholder="Repetí la clave" autocomplete="new-password" oninput="refreshEncryptState()" />
+                  <button type="button" class="btn btn-outline btn-sm" onclick="generateEncryptKey()">🎲 Generar clave</button>
+                  <button type="button" class="btn btn-outline btn-sm" id="enc-copy" onclick="copyEncryptKey()">📋 Copiar</button>
+                </div>
+                <p class="enc-hint" id="enc-hint">La clave no se guarda en ningún lado y no se puede recuperar. No se puede encriptar video.</p>
+              </div>
+              <div id="enc-alert" class="hidden"></div>
+            </div>
             <div class="upload-zone" id="upload-area"
-              onclick="document.getElementById('file-input').click()"
+              onclick="if (encryptBlocksUpload()) return; document.getElementById('file-input').click()"
               ondragover="handleDragOver(event)"
               ondrop="handleDrop(event)"
               ondragleave="handleDragLeave(event)">
@@ -1326,6 +1359,7 @@ let _userFolderId = null, _userReports = [], _userVisibleFolderIds = new Set();
 let currentSessionId = null, _hbTimer = null, _sessionStarting = false;   // métricas de acceso
 let _lastActivity = 0, _activityBound = false;   // detección de inactividad para el latido
 let _loginNotice = null;   // aviso a mostrar en la pantalla de login (ej. acceso denegado)
+const _sessionKeys = new Map();   // informes encriptados abiertos en esta pestaña: reportId → clave de sesión (solo en memoria)
 
 // ── Modo "enlace público" ──
 // Si la URL trae ?p=<token>, mostramos el informe sin login y sin tocar la app.
@@ -1362,6 +1396,7 @@ function boot() {
       enterPortal();
     } else {
       stopHeartbeat(); currentSessionId = null;
+      _sessionKeys.clear();   // claves de sesión de informes encriptados abiertos en esta pestaña
       currentUser = null; currentUserData = null;
       renderLogin();
     }
@@ -1595,10 +1630,38 @@ async function renderPublicView(token) {
     lastAccessAt: firebase.firestore.FieldValue.serverTimestamp()
   }).catch(() => {});
 
-  const l = document.getElementById('public-loading'); if (l) l.remove();
   // Sin marca de agua ni restricciones: es una vista pública explícita.
-  await openViewer(data.url, data.name || 'Informe',
-    { watermark: false, noPrint: false, noDownload: false, noCopy: false }, null, null);
+  const pubOpts = { watermark: false, noPrint: false, noDownload: false, noCopy: false };
+  const name = data.name || 'Informe';
+  if (data.encrypted) {
+    // Informe encriptado: la clave de sesión viene en el fragmento (#k=…), que el
+    // navegador no manda al servidor. Sin #k (o si no sirve) se ofrece ingresar
+    // la clave del informe.
+    let bytes;
+    try { bytes = new Uint8Array(await fetchBytes(freshUrl(data.url))); }
+    catch (e) {
+      return showPublicMessage('⚠️', 'No se pudo cargar', 'Ocurrió un error al abrir el informe. Intentá de nuevo más tarde.');
+    }
+    const l = document.getElementById('public-loading'); if (l) l.remove();
+    const C = await cifrado();
+    const k = new URLSearchParams(location.hash.slice(1)).get('k');
+    const out = (r) => ({ bytes: r.bytes, name, gpgBytes: bytes });
+    let plain = null;
+    if (k) { try { plain = out(await C.descifrar(bytes, C.fragmentoASessionKey(k))); } catch (e) { plain = null; } }
+    if (!plain) {
+      plain = await askReportKey(name, async pw => out(await C.descifrarConPassword(bytes, pw)), k
+        ? `La clave incluida en el enlace no sirve para <b>${esc(name)}</b>. Ingresá la clave del informe.`
+        : `Este enlace no incluye la clave de <b>${esc(name)}</b>. Ingresá la clave del informe para verlo.`);
+    }
+    if (!plain) {
+      return showPublicMessage('🔒', 'Informe encriptado',
+        'Para verlo necesitás el enlace completo (con la parte que sigue a #) o la clave del informe.');
+    }
+    await openViewer(plain, name, pubOpts, null, null);
+    return;
+  }
+  const l = document.getElementById('public-loading'); if (l) l.remove();
+  await openViewer(data.url, name, pubOpts, null, null);
 }
 
 function showPublicMessage(icon, title, text) {
@@ -1628,7 +1691,7 @@ async function doLogin() {
     showAlert('login-alert', 'error', '❌ Email o contraseña incorrectos');
   }
 }
-async function doLogout() { await endSession(); auth.signOut(); }
+async function doLogout() { _sessionKeys.clear(); await endSession(); auth.signOut(); }
 
 // Autoservicio desde el login: el usuario pide un enlace para restablecer su
 // contraseña. Lo manda la Cloud Function solicitarRestablecimiento desde
@@ -1919,14 +1982,15 @@ function renderReportsTable() {
 
   const fileRows = files.map(r => `
         <tr>
-          <td style="font-weight:600">${fileIcon(r.name)} ${esc(r.name)}${(() => { const n = reportAccessCounts[r.id] || 0; return `<span class="ucount-badge ${n ? 'has' : ''}" title="${n} usuario${n === 1 ? '' : 's'} con acceso">👤 ${n}</span>`; })()}</td>
+          <td style="font-weight:600">${fileIcon(r.name)} ${esc(r.name)}${r.encrypted ? '<span class="enc-tag" title="Informe encriptado: se abre con su clave">🔒</span>' : ''}${(() => { const n = reportAccessCounts[r.id] || 0; return `<span class="ucount-badge ${n ? 'has' : ''}" title="${n} usuario${n === 1 ? '' : 's'} con acceso">👤 ${n}</span>`; })()}</td>
           <td style="color:var(--gray)">${fmtSize(r.size)}</td>
           <td style="color:var(--gray)">${fmtDate(r.createdAt)}${r.updatedAt ? `<br><span style="font-size:.72rem" title="Última reescritura">✏️ ${fmtDate(r.updatedAt)}</span>` : ''}</td>
           <td style="color:var(--gray)">${r.creadoPor ? esc(r.creadoPor) : '—'}</td>
           <td><select class="fselect" style="min-width:150px;font-size:.8rem;padding:.4rem .5rem" onchange="moveReport('${r.id}', this.value)">${folderOptionsHTML(r.folderId || '')}</select></td>
           <td><div class="td-actions">
-            <button class="btn btn-outline btn-sm" onclick="previewReport('${r.storagePath}','${esc(r.name)}')">👁 Ver</button>
-            <button class="btn btn-outline btn-sm" onclick="downloadReport('${r.storagePath}','${esc(r.name)}')">⬇ Descargar</button>
+            <button class="btn btn-outline btn-sm" onclick="previewReport('${r.storagePath}','${esc(r.name)}','${r.id}')">👁 Ver</button>
+            <button class="btn btn-outline btn-sm" onclick="downloadReport('${r.storagePath}','${esc(r.name)}','${r.id}')">⬇ Descargar</button>
+            ${r.encrypted ? `<button class="btn btn-outline btn-sm" title="El archivo cifrado tal como está guardado: se abre con gpg -d y la clave" onclick="downloadEncryptedRaw('${r.storagePath}','${esc(r.name)}')">🔐 Descargar cifrado (.gpg)</button>` : ''}
             <button class="btn btn-outline btn-sm" onclick="goToReportStats('${r.id}','${esc(r.name)}')">📈 Estadísticas</button>
             <button class="btn btn-outline btn-sm" onclick="openReportUsersModal('${r.id}','${esc(r.name)}')">👥 Usuarios</button>
             <button class="btn btn-outline btn-sm" onclick="startOverwrite('${r.id}','${r.storagePath}','${esc(r.name)}')">🔄 Reescribir</button>
@@ -1948,6 +2012,7 @@ function handleDragOver(e) { e.preventDefault(); el('upload-area').classList.add
 function handleDragLeave()  { el('upload-area').classList.remove('drag'); }
 function handleDrop(e) {
   e.preventDefault(); el('upload-area').classList.remove('drag');
+  if (encryptBlocksUpload()) return;
   const files = [...e.dataTransfer.files];
   if (files.length) uploadFiles(files);
 }
@@ -1956,13 +2021,119 @@ function handleFileSelect(e) {
   e.target.value = '';
 }
 
+// ── Encriptación con clave (subida) ──
+// Con "🔒 Encriptar con clave" tildado, cada archivo se cifra en el navegador
+// con OpenPGP (cifrado.js; igual que `gpg -c`) antes de subirlo, y queda en
+// Storage como un .gpg estándar. Todos los archivos de la misma subida usan la
+// misma clave, cada uno con su propia clave de sesión. También se puede subir un
+// .gpg cifrado en la máquina del admin con `gpg -c`: se sube tal cual.
+// La clave no se guarda en ningún lado: ni Firestore ni el navegador.
+const ENC_MIN_LEN = 10;
+const ENC_MAX_BYTES = 100 * 1024 * 1024;   // el portal descifra el archivo entero en memoria
+const GPG_TYPE = 'application/pgp-encrypted';
+
+function encryptState() {
+  const on = !!(el('enc-toggle') && el('enc-toggle').checked);
+  const p1 = (el('enc-pass') && el('enc-pass').value) || '';
+  const p2 = (el('enc-pass2') && el('enc-pass2').value) || '';
+  let problem = '';
+  if (on && p1.length < ENC_MIN_LEN) problem = `La clave tiene que tener al menos ${ENC_MIN_LEN} caracteres.`;
+  else if (on && p1 !== p2) problem = 'La confirmación no coincide con la clave.';
+  return { on, password: p1, valid: on && !problem, problem };
+}
+function refreshEncryptState() {
+  const st = encryptState();
+  el('enc-fields').classList.toggle('hidden', !st.on);
+  el('upload-area').classList.toggle('blocked', st.on && !st.valid);
+  const hint = el('enc-hint');
+  if (hint) {
+    hint.className = 'enc-hint' + (st.on ? (st.valid ? ' ok' : ' bad') : '');
+    hint.textContent = !st.on ? '' : st.valid
+      ? '✓ Clave lista. Guardala: no se puede recuperar. No se puede encriptar video.'
+      : st.problem;
+  }
+}
+function onEncryptToggle() {
+  if (!el('enc-toggle').checked) {
+    // Al destildar se borran la clave y el aviso, para no dejarlos en pantalla.
+    el('enc-pass').value = ''; el('enc-pass2').value = '';
+    el('enc-pass').type = el('enc-pass2').type = 'password';
+    clearAlert('enc-alert');
+  }
+  refreshEncryptState();
+}
+// true (y avisa) si la encriptación está tildada pero la clave no es válida.
+function encryptBlocksUpload() {
+  const st = encryptState();
+  if (st.on && !st.valid) { refreshEncryptState(); alert('🔒 ' + st.problem); return true; }
+  return false;
+}
+async function generateEncryptKey() {
+  const C = await cifrado();
+  const k = C.generarClave();
+  el('enc-pass').value = k; el('enc-pass2').value = k;
+  el('enc-pass').type = el('enc-pass2').type = 'text';   // visible, para copiarla
+  refreshEncryptState();
+}
+function copyEncryptKey() {
+  const k = el('enc-pass') && el('enc-pass').value;
+  if (!k) return;
+  const done = () => showToast('📋 Clave copiada', 'info', 2500);
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(k).then(done).catch(() => {});
+}
+// Motivo por el que un archivo no se puede encriptar ('' si se puede).
+function encryptBlockReason(file) {
+  if (fileKind(file.name) === 'video') return 'video';
+  if (file.size > ENC_MAX_BYTES) return 'más de 100 MB';
+  return '';
+}
+
 async function uploadFiles(files) {
   // Se acepta cualquier tipo de archivo. Los formatos con visor (HTML, PDF,
   // Word, PowerPoint, video) se muestran inline; el resto se ofrece para descarga.
   if (!files.length) return;
+  const enc = encryptState();
+  if (enc.on && !enc.valid) { encryptBlocksUpload(); return; }
+
+  // Un .gpg/.pgp se lee para saber qué es: con contraseña (`gpg -c`) se sube tal
+  // cual como informe encriptado; cifrado para una clave GPG se rechaza (y no se
+  // sube nada); si no es OpenPGP, o pesa más de 100 MB, va como archivo común.
+  const avisos = [], gpgSimetricos = new Set();
+  const gpgFiles = files.filter(f => GPG_RE.test(f.name));
+  if (gpgFiles.length) {
+    const C = await cifrado();
+    const rechazados = [];
+    for (const f of gpgFiles) {
+      if (f.size > ENC_MAX_BYTES) { avisos.push(`• ${f.name}: pesa más de 100 MB, se subió como archivo común (no se abre con clave en el portal).`); continue; }
+      const tipo = await C.tipoMensaje(new Uint8Array(await f.arrayBuffer()));
+      if (tipo === 'simetrico') gpgSimetricos.add(f);
+      else if (tipo === 'clave-publica') rechazados.push(f);
+      else avisos.push(`• ${f.name}: no es un archivo OpenPGP, se subió como archivo común.`);
+    }
+    if (rechazados.length) {
+      return alert(rechazados.map(f => `• ${f.name}`).join('\n') + '\n\n' +
+        'Este archivo está cifrado para una clave GPG, no con contraseña. Ciframelo con `gpg -c`.\n\nNo se subió nada.');
+    }
+  }
+  const encryptable = (f) => enc.on && !gpgSimetricos.has(f) && !GPG_RE.test(f.name);
+
+  // Video y archivos grandes no se encriptan: se avisa y el admin decide si
+  // subirlos sin encriptar o dejarlos afuera.
+  if (enc.on) {
+    const noEnc = files.filter(f => encryptable(f) && encryptBlockReason(f));
+    if (noEnc.length) {
+      const list = noEnc.map(f => `• ${f.name} (${encryptBlockReason(f)})`).join('\n');
+      const plain = confirm(`Estos archivos no se pueden encriptar:\n${list}\n\n` +
+        `Aceptar: subirlos SIN encriptar.\nCancelar: dejarlos afuera y subir solo los demás.`);
+      if (!plain) files = files.filter(f => !noEnc.includes(f));
+      if (!files.length) return;
+    }
+  }
+  clearAlert('enc-alert');
 
   // Carpeta destino elegida en el selector (null = raíz).
   const uploadFolderId = (el('upload-folder-select') && el('upload-folder-select').value) || null;
+  let encryptedCount = 0;
 
   el('upload-progress').classList.remove('hidden');
   const bar = el('progress-bar');
@@ -1976,9 +2147,28 @@ async function uploadFiles(files) {
     bar.style.width = '0%';
     bar.style.background = 'var(--orange)';
 
-    const path = `reports/${Date.now()}_${file.name}`;
+    // Encriptado (cifrado acá o .gpg hecho en local): en Storage termina en .gpg
+    // y en Firestore el nombre va sin .gpg, que es el que elige el visor.
+    const encryptThis = encryptable(file) && !encryptBlockReason(file);
+    const localGpg = gpgSimetricos.has(file);
+    const isEnc = encryptThis || localGpg;
+    const name = localGpg ? stripGpg(file.name) : file.name;
+    const path = `reports/${Date.now()}_${name}` + (isEnc ? '.gpg' : '');
+    // El id del doc se genera antes de subir: el archivo lleva ese id en su
+    // metadata (customMetadata.reportId), que es lo que la regla de Storage
+    // cruza con userAccess/{uid}.reportIds para dejar leerlo a un cliente.
+    const reportRef = db.collection('reports').doc();
     try {
-      const task = storage.ref(path).put(file, { contentType: file.type || guessContentType(file.name) });
+      let body = file;
+      const meta = { contentType: isEnc ? GPG_TYPE : (file.type || guessContentType(file.name)), customMetadata: { reportId: reportRef.id } };
+      if (encryptThis) {
+        statusEl.textContent = `Encriptando ${i+1}/${files.length}: ${file.name}`;
+        const C = await cifrado();
+        const out = await C.cifrar(new Uint8Array(await file.arrayBuffer()), { password: enc.password, filename: file.name });
+        body = new Blob([out.bytes], { type: GPG_TYPE });
+      }
+      if (isEnc) statusEl.textContent = `Subiendo ${i+1}/${files.length}: ${name} 🔒`;
+      const task = storage.ref(path).put(body, meta);
       await new Promise((res, rej) => {
         task.on('state_changed',
           s => {
@@ -1995,15 +2185,18 @@ async function uploadFiles(files) {
           },
           async () => {
             try {
-              await db.collection('reports').add({
-                name: file.name, storagePath: path, size: file.size,
-                ext: extOf(file.name),
+              await reportRef.set({
+                name, storagePath: path, size: file.size,
+                ext: extOf(name),
                 folderId: uploadFolderId,   // null = raíz
                 createdAt: firebase.firestore.FieldValue.serverTimestamp(),
                 // Quién creó el informe (usuario admin autenticado).
                 creadoPor: (currentUser && currentUser.email) || null,
-                creadoPorUid: (currentUser && currentUser.uid) || null
+                creadoPorUid: (currentUser && currentUser.uid) || null,
+                // Solo la marca: la clave y la clave de sesión nunca van a Firestore.
+                ...(isEnc ? { encrypted: true, encFormat: 'openpgp' } : {})
               });
+              if (isEnc) encryptedCount++;
               res();
             } catch (e) {
               console.error('Firestore write error:', e);
@@ -2040,6 +2233,11 @@ async function uploadFiles(files) {
 
   statusEl.textContent = '✅ ¡Archivos subidos correctamente!';
   bar.style.width = '100%'; el('upload-pct').textContent = '100%';
+  if (encryptedCount) {
+    showAlert('enc-alert', 'success', `🔒 ${encryptedCount === 1 ? 'Se subió 1 informe encriptado' : `Se subieron ${encryptedCount} informes encriptados`}. ` +
+      '<b>Guardá la clave: no se puede recuperar.</b> Enviala al cliente por un canal distinto al correo de aviso.');
+  }
+  if (avisos.length) alert('Atención:\n' + avisos.join('\n'));
   await loadReports(); renderReportsTable(); renderFoldersTree();
   setTimeout(() => el('upload-progress').classList.add('hidden'), 3000);
 }
@@ -2318,7 +2516,8 @@ async function moveReport(reportId, folderId) {
 let _overwriteTarget = null;
 
 function startOverwrite(reportId, storagePath, name) {
-  _overwriteTarget = { reportId, storagePath, name, ext: extOf(name) };
+  const rep = allReports.find(x => x.id === reportId) || {};
+  _overwriteTarget = { reportId, storagePath, name, ext: extOf(name), encrypted: !!rep.encrypted };
   const inp = el('overwrite-input');
   if (inp) { inp.value = ''; inp.click(); }
 }
@@ -2333,15 +2532,54 @@ async function overwriteReport(target, file) {
   // Debe ser del mismo tipo que el informe original: el visor decide cómo
   // renderizar según la extensión del nombre, que no cambia al reescribir.
   // Para cambiar de formato, hay que borrar el informe y subir uno nuevo.
-  if (extOf(file.name) !== target.ext) {
+  // Un informe encriptado también acepta un .gpg hecho en local (informe.html.gpg).
+  const localGpg = !!target.encrypted && GPG_RE.test(file.name);
+  if (extOf(localGpg ? stripGpg(file.name) : file.name) !== target.ext) {
     return alert(`El archivo nuevo debe ser del mismo tipo (.${target.ext}) que el informe actual.\n\n` +
       `Para cambiar el formato, borrá el informe y subí uno nuevo.`);
   }
   const rep = allReports.find(x => x.id === target.reportId) || {};
+  if (target.encrypted && file.size > ENC_MAX_BYTES) {
+    return alert('El informe está encriptado y el archivo nuevo pesa más de 100 MB: no se puede encriptar.\n\n' +
+      'Para subirlo sin encriptar, borrá el informe y subí uno nuevo.');
+  }
+  if (localGpg) {
+    const tipo = await (await cifrado()).tipoMensaje(new Uint8Array(await file.arrayBuffer()));
+    if (tipo === 'clave-publica') return alert('Este archivo está cifrado para una clave GPG, no con contraseña. Ciframelo con `gpg -c`.');
+    if (tipo !== 'simetrico') return alert('El archivo no es un .gpg válido (OpenPGP), así que no se puede usar para reescribir un informe encriptado.');
+  }
   if (!confirm(
     `¿Reescribir el informe "${target.name}" con el archivo "${file.name}"?\n\n` +
     `Se reemplaza el contenido, pero se conservan el mismo informe, sus permisos, ` +
-    `accesos y el enlace público (si tiene).\n\nEsta acción no se puede deshacer.`)) return;
+    `accesos y el enlace público (si tiene).` +
+    (localGpg ? `\n\n🔒 Al reescribir con un archivo cifrado en tu máquina, el enlace público cambia: vas a tener que volver a copiarlo.`
+      : target.encrypted ? `\n\n🔒 Es un informe encriptado: se te va a pedir su clave y el archivo nuevo se encripta con la misma.` : '') +
+    `\n\nEsta acción no se puede deshacer.`)) return;
+
+  // Encriptado desde el portal: se cifra con la MISMA clave de sesión y la misma
+  // contraseña, así abre con la misma clave y el #k= del enlace público sigue
+  // sirviendo. Con la clave incorrecta (o al cancelar) no se toca el archivo.
+  // Con un .gpg hecho en local se sube tal cual (su clave de sesión es otra).
+  let body = file, contentType = target.encrypted ? GPG_TYPE : (file.type || guessContentType(file.name));
+  if (target.encrypted && !localGpg) {
+    try {
+      const C = await cifrado();
+      showLoadingOverlay(target.name);
+      let actual;
+      try { actual = await reportBytes(target.storagePath); } finally { hideLoadingOverlay(); }
+      const clave = await askReportKey(target.name,
+        async pw => ({ password: pw, sessionKey: (await C.descifrarConPassword(actual, pw)).sessionKey }),
+        `Ingresá la clave de <b>${esc(target.name)}</b> para reescribirlo. El archivo nuevo se encripta con la misma clave.`);
+      if (!clave) return;
+      _sessionKeys.set(target.reportId, clave.sessionKey);
+      const out = await C.cifrar(new Uint8Array(await file.arrayBuffer()),
+        { password: clave.password, filename: target.name, sessionKey: clave.sessionKey });
+      body = new Blob([out.bytes], { type: GPG_TYPE });
+    } catch (e) {
+      return alert('No se pudo encriptar el archivo nuevo; el informe no se modificó.\n\n' + (e.message || e));
+    }
+  }
+  if (localGpg) _sessionKeys.delete(target.reportId);
 
   el('upload-progress').classList.remove('hidden');
   const bar = el('progress-bar'), statusEl = el('upload-status');
@@ -2351,7 +2589,9 @@ async function overwriteReport(target, file) {
   bar.style.width = '0%'; bar.style.background = 'var(--orange)';
 
   try {
-    const task = storage.ref(target.storagePath).put(file, { contentType: file.type || guessContentType(file.name) });
+    // Storage REEMPLAZA la metadata al sobrescribir: sin la etiqueta reportId
+    // los clientes con acceso dejarían de poder abrir el informe.
+    const task = storage.ref(target.storagePath).put(body, { contentType, customMetadata: { reportId: target.reportId } });
     await new Promise((res, rej) => {
       task.on('state_changed',
         s => {
@@ -2386,6 +2626,13 @@ async function overwriteReport(target, file) {
     bar.style.width = '100%'; el('upload-pct').textContent = '100%';
     await loadReports(); renderReportsTable();
     setTimeout(() => el('upload-progress').classList.add('hidden'), 3000);
+    // Con un .gpg hecho en local la clave de sesión cambió: el #k= viejo ya no
+    // sirve. Se abre el diálogo del enlace, que pide la clave para armar el nuevo.
+    if (localGpg && rep.publicToken) {
+      alert('🔗 El informe tiene enlace público y el archivo nuevo tiene otra clave de sesión: ' +
+        'el enlace que mandaste ya no abre sin la clave. Ingresá la clave para obtener el enlace nuevo y volvé a enviarlo.');
+      managePublicLink(target.reportId, target.storagePath, target.name);
+    }
   } catch (err) {
     bar.style.background = '#B83A26'; bar.style.width = '100%';
     let msg = '❌ Error al reescribir';
@@ -2426,12 +2673,21 @@ async function deleteReport(id, storagePath) {
   await loadReports(); renderReportsTable();
 }
 
-async function previewReport(storagePath, name) {
+async function previewReport(storagePath, name, reportId) {
+  // Vista previa del admin: sin restricciones (ve el documento tal cual).
+  const opts = { watermark: false, noPrint: false, noDownload: false, noCopy: false };
+  const rep = reportId && allReports.find(r => r.id === reportId);
+  if (rep && rep.encrypted) {
+    try {
+      const plain = await decryptReport(rep);
+      if (plain) await openViewer(plain, name, opts, currentUser && currentUser.email);
+    } catch (err) { alert('Error al cargar el informe: ' + (err.message || err)); }
+    return;
+  }
   showLoadingOverlay(name);
   try {
     const url = await storage.ref(storagePath).getDownloadURL();
-    // Vista previa del admin: sin restricciones (ve el documento tal cual).
-    await openViewer(url, name, { watermark: false, noPrint: false, noDownload: false, noCopy: false }, currentUser && currentUser.email);
+    await openViewer(url, name, opts, currentUser && currentUser.email);
   } catch (err) {
     alert('Error al cargar el informe: ' + (err.message || err));
   } finally {
@@ -2465,7 +2721,16 @@ async function downloadBlobUrl(url, name) {
   }
 }
 // Descarga un informe/documento por su ruta de Storage, con su nombre original.
-async function downloadReport(storagePath, name) {
+async function downloadReport(storagePath, name, reportId) {
+  // Encriptado: se descarga el contenido DESCIFRADO con su nombre original.
+  const rep = reportId && allReports.find(r => r.id === reportId);
+  if (rep && rep.encrypted) {
+    try {
+      const plain = await decryptReport(rep);
+      if (plain) saveBytes(plain.bytes, name);
+    } catch (err) { alert('Error al descargar el informe: ' + (err.message || err)); }
+    return;
+  }
   showLoadingOverlay(name);
   try {
     const url = await storage.ref(storagePath).getDownloadURL();
@@ -2477,6 +2742,14 @@ async function downloadReport(storagePath, name) {
   }
 }
 
+// El archivo tal como está en Storage (cifrado, .gpg): se abre con `gpg -d` y la clave.
+async function downloadEncryptedRaw(storagePath, name) {
+  showLoadingOverlay(name);
+  try { saveBytes(await reportBytes(storagePath), name + '.gpg'); }
+  catch (err) { alert('Error al descargar el informe: ' + (err.message || err)); }
+  finally { hideLoadingOverlay(); }
+}
+
 /* ── ENLACES PÚBLICOS ── */
 // Token aleatorio para la URL pública (no adivinable).
 function randomToken() {
@@ -2484,20 +2757,79 @@ function randomToken() {
   crypto.getRandomValues(a);
   return Array.from(a, b => b.toString(16).padStart(2, '0')).join('');
 }
-function publicLinkUrl(token) { return `${location.origin}/?p=${token}`; }
+// Informe encriptado: la clave de sesión va en el fragmento (#k=9.<base64url>),
+// que el navegador nunca manda al servidor. No se guarda en ningún lado: para
+// volver a mostrar el enlace completo hay que tenerla en memoria o ingresar la
+// clave del informe.
+function publicLinkUrl(token, frag) { return `${location.origin}/?p=${token}` + (frag ? `#k=${frag}` : ''); }
+
+// Fragmento #k= de un informe encriptado si su clave de sesión ya está en memoria, o null.
+async function cachedFragment(reportId) {
+  const sk = _sessionKeys.get(reportId);
+  return sk ? (await cifrado()).sessionKeyAFragmento(sk) : null;
+}
+
+// Clave de sesión a partir de la clave del informe. Se descifra el archivo
+// entero para validarla: con un .gpg hecho con `gpg -c` en local, una clave
+// incorrecta recién se detecta al descifrar.
+async function unlockReportFragment(rep, password) {
+  const C = await cifrado();
+  const { sessionKey } = await C.descifrarConPassword(await reportBytes(rep.storagePath), password);
+  _sessionKeys.set(rep.id, sessionKey);
+  return C.sessionKeyAFragmento(sessionKey);
+}
+
+// "9.<base64url>" → "9:<HEX>", para `gpg --override-session-key`.
+function fragmentToGpg(frag) {
+  const [id, b64] = String(frag).split('.');
+  const bin = atob(b64.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - b64.length % 4) % 4));
+  return id + ':' + Array.from(bin, c => c.charCodeAt(0).toString(16).padStart(2, '0')).join('').toUpperCase();
+}
+
+// Botón del diálogo: pide la clave en línea y, si es correcta, sigue con `then(frag)`.
+async function submitLinkKey(reportId, then) {
+  const rep = allReports.find(x => x.id === reportId);
+  const pw = (el('link-key-input') && el('link-key-input').value) || '';
+  if (!rep || !pw) return;
+  const btn = el('link-key-btn'); if (btn) btn.disabled = true;
+  showAlert('link-key-alert', 'success', '⏳ Verificando la clave…');
+  try {
+    const frag = await unlockReportFragment(rep, pw);
+    await then(frag);
+  } catch (e) {
+    if (btn) btn.disabled = false;
+    showAlert('link-key-alert', 'error', e && e.code === 'clave-incorrecta' ? '❌ Clave incorrecta' : '❌ ' + esc(e.message || String(e)));
+  }
+}
+function linkKeyFieldHTML(reportId, label, action) {
+  return `<div id="link-key-alert" class="hidden"></div>
+    <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+      <input id="link-key-input" type="password" autocomplete="off" placeholder="Clave del informe"
+        onkeydown="if(event.key==='Enter') el('link-key-btn').click()" style="flex:1;min-width:200px" />
+      <button class="btn btn-orange btn-sm" id="link-key-btn" onclick="${action}">${label}</button>
+    </div>`;
+}
 
 // Abre el diálogo de gestión del enlace público de un informe.
 async function managePublicLink(reportId, storagePath, name) {
   const r = allReports.find(x => x.id === reportId) || {};
   const token = r.publicToken || null;
-  openLinkModal(publicLinkModalBody(reportId, storagePath, name, token));
-  if (token) {
-    try {
-      const snap = await db.collection('publicLinks').doc(token).get();
-      const d = snap.exists ? snap.data() : {};
-      fillLinkStats(d.hitCount, d.lastAccessAt);
-    } catch { fillLinkStats(0, null); }
-  }
+  const frag = r.encrypted ? await cachedFragment(reportId) : null;
+  openLinkModal(publicLinkModalBody(reportId, storagePath, name, token, frag));
+  if (token) loadLinkStats(token);
+}
+async function loadLinkStats(token) {
+  try {
+    const snap = await db.collection('publicLinks').doc(token).get();
+    const d = snap.exists ? snap.data() : {};
+    fillLinkStats(d.hitCount, d.lastAccessAt);
+  } catch { fillLinkStats(0, null); }
+}
+// Con la clave ya verificada: muestra el enlace completo (con #k=).
+function showFullPublicLink(reportId, storagePath, name, frag) {
+  const r = allReports.find(x => x.id === reportId) || {};
+  setLinkModalBody(publicLinkModalBody(reportId, storagePath, name, r.publicToken || null, frag));
+  if (r.publicToken) loadLinkStats(r.publicToken);
 }
 
 // Rellena el bloque de estadísticas del diálogo (accesos + último acceso).
@@ -2508,12 +2840,29 @@ function fillLinkStats(count, lastAccessTs) {
   box.innerHTML = `👁 <b>${n}</b> ${n === 1 ? 'acceso' : 'accesos'} · último: ${last}`;
 }
 
-function publicLinkModalBody(reportId, storagePath, name, token) {
+function publicLinkModalBody(reportId, storagePath, name, token, frag) {
+  const rep = allReports.find(x => x.id === reportId) || {};
+  if (token && rep.encrypted && !frag) {
+    // El fragmento #k= no está guardado: se reconstruye con la clave (la clave de
+    // sesión no cambia, así que es exactamente el mismo enlace que se generó).
+    return `
+      <p style="font-size:.85rem;color:var(--gray);font-weight:500;margin:0 0 .85rem">
+        🔒 Este enlace incluye la clave del informe. Para verlo completo, ingresá la clave de <b>${esc(name)}</b>.
+      </p>
+      ${linkKeyFieldHTML(reportId, '🔓 Mostrar enlace', `submitLinkKey('${reportId}', k => showFullPublicLink('${reportId}','${storagePath}','${esc(name)}', k))`)}
+      <div id="public-link-stats" style="margin-top:.9rem;font-size:.82rem;color:var(--gray);font-weight:500">
+        Cargando estadísticas…
+      </div>
+      <div style="margin-top:1.1rem;border-top:1px solid #eee;padding-top:.9rem">
+        <button class="btn btn-danger btn-sm" onclick="revokePublicLink('${reportId}')">🚫 Desactivar enlace</button>
+      </div>`;
+  }
   if (token) {
-    const url = publicLinkUrl(token);
+    const url = publicLinkUrl(token, rep.encrypted ? frag : null);
     return `
       <p style="font-size:.85rem;color:var(--gray);font-weight:500;margin:0 0 .85rem">
         Cualquier persona con este enlace puede ver <b>${esc(name)}</b> desde cualquier navegador, sin iniciar sesión.
+        ${rep.encrypted ? '<br>🔒 El enlace lleva la clave del archivo después de <b>#</b>: esa parte nunca llega al servidor. Compartilo completo.' : ''}
       </p>
       <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
         <input id="public-link-input" type="text" readonly value="${esc(url)}"
@@ -2522,6 +2871,12 @@ function publicLinkModalBody(reportId, storagePath, name, token) {
         <button class="btn btn-orange btn-sm" onclick="copyPublicLink()">📋 Copiar</button>
         <a class="btn btn-outline btn-sm" href="${esc(url)}" target="_blank" rel="noopener">↗ Abrir</a>
       </div>
+      ${rep.encrypted && frag ? `<details class="gpg-help">
+        <summary>Descifrar en tu máquina con gpg</summary>
+        <p>Con la clave de sesión del enlace, sin la clave del informe:</p>
+        <code>gpg --override-session-key '${esc(fragmentToGpg(frag))}' -d ${esc(name)}.gpg</code>
+        <p>O con la clave del informe: <code>gpg -d ${esc(name)}.gpg</code></p>
+      </details>` : ''}
       <div id="public-link-stats" style="margin-top:.9rem;font-size:.82rem;color:var(--gray);font-weight:500">
         Cargando estadísticas…
       </div>
@@ -2529,15 +2884,27 @@ function publicLinkModalBody(reportId, storagePath, name, token) {
         <button class="btn btn-danger btn-sm" onclick="revokePublicLink('${reportId}')">🚫 Desactivar enlace</button>
       </div>`;
   }
+  if (rep.encrypted && !frag) {
+    return `
+      <p style="font-size:.85rem;color:var(--gray);font-weight:500;margin:0 0 1rem">
+        Generá un enlace público para <b>${esc(name)}</b>. Cualquier persona con el enlace
+        podrá verlo desde cualquier navegador, <b>sin iniciar sesión</b>.<br>
+        🔒 Es un informe encriptado: el enlace llevará la clave del archivo después de <b>#</b>
+        (esa parte nunca llega al servidor). Ingresá la clave del informe para generarlo.
+      </p>
+      ${linkKeyFieldHTML(reportId, '🔗 Generar enlace público', `submitLinkKey('${reportId}', k => generatePublicLink('${reportId}','${storagePath}','${esc(name)}', k))`)}`;
+  }
   return `
     <p style="font-size:.85rem;color:var(--gray);font-weight:500;margin:0 0 1rem">
       Generá un enlace público para <b>${esc(name)}</b>. Cualquier persona con el enlace
       podrá verlo desde cualquier navegador, <b>sin iniciar sesión</b>.
     </p>
-    <button class="btn btn-orange" onclick="generatePublicLink('${reportId}','${storagePath}','${esc(name)}')">🔗 Generar enlace público</button>`;
+    <button class="btn btn-orange" onclick="generatePublicLink('${reportId}','${storagePath}','${esc(name)}'${frag ? `,'${frag}'` : ''})">🔗 Generar enlace público</button>`;
 }
 
-async function generatePublicLink(reportId, storagePath, name) {
+async function generatePublicLink(reportId, storagePath, name, frag) {
+  const rep = allReports.find(x => x.id === reportId) || {};
+  if (rep.encrypted && !frag) return;   // sin la clave de sesión el enlace no abriría
   setLinkModalBody('<div class="loading">Generando enlace…</div>');
   try {
     // La URL de descarga de Storage ya es pública (lleva su propio token), por lo
@@ -2546,12 +2913,14 @@ async function generatePublicLink(reportId, storagePath, name) {
     const token = randomToken();
     await db.collection('publicLinks').doc(token).set({
       reportId, name, url, enabled: true, hitCount: 0,
+      // Solo la marca: la clave de sesión viaja en el #k= del enlace, nunca en Firestore.
+      ...(rep.encrypted ? { encrypted: true } : {}),
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     });
     await db.collection('reports').doc(reportId).update({ publicToken: token });
     const r = allReports.find(x => x.id === reportId); if (r) r.publicToken = token;
     renderReportsTable();
-    setLinkModalBody(publicLinkModalBody(reportId, storagePath, name, token));
+    setLinkModalBody(publicLinkModalBody(reportId, storagePath, name, token, frag));
     fillLinkStats(0, null);
   } catch (e) {
     setLinkModalBody(`<div class="alert alert-error">❌ No se pudo generar el enlace: ${esc(e.message || String(e))}</div>`);
@@ -3468,7 +3837,12 @@ async function loadUserReports(containerId = 'user-reports-container') {
     return;
   }
   const reports = await Promise.all(
-    ids.map(async id => { const d = await db.collection('reports').doc(id).get(); return d.exists ? {id,...d.data()} : null; })
+    // Cada get por separado: un id viejo o sin permiso (las reglas niegan) no
+    // rompe la lista entera.
+    ids.map(async id => {
+      try { const d = await db.collection('reports').doc(id).get(); return d.exists ? {id,...d.data()} : null; }
+      catch (e) { return null; }
+    })
   ).then(rs => rs.filter(Boolean));
   // Si el folderId apunta a una carpeta inexistente (p. ej. borrada), lo tratamos como raíz.
   reports.forEach(r => { if (r.folderId && !folderById(r.folderId)) r.folderId = null; });
@@ -3567,7 +3941,7 @@ function renderUserLevel() {
     return `
     <div class="report-card" onclick="openUserReport('${r.storagePath}','${esc(r.name)}','${r.id}')">
       <div class="report-card-icon">${fileIcon(r.name)}</div>
-      <h3>${esc(r.name)}</h3>
+      <h3>${esc(r.name)}${r.encrypted ? '<span class="enc-tag" title="Informe encriptado: se abre con la clave que te enviaron">🔒</span>' : ''}</h3>
       <div class="meta">${fmtSize(r.size)} · ${fmtDate(r.createdAt)}</div>
     </div>`;
   }).join('');
@@ -3580,12 +3954,20 @@ async function openUserReport(storagePath, name, reportId) {
   // vista previa), pero con su reportId para la analítica (marcada role: 'admin').
   const admin = userIsAdmin();
   if (!admin && accessExpired(myAccessOptions[reportId])) { showAccessExpired(); return; }
+  const opts = admin
+    ? { watermark: false, noPrint: false, noDownload: false, noCopy: false }
+    : mergeOpts(myAccessOptions[reportId]);
+  const rep = _userReports.find(r => r.id === reportId);
+  if (rep && rep.encrypted) {
+    try {
+      const plain = await decryptReport(rep);
+      if (plain) await openViewer(plain, name, opts, currentUser && currentUser.email, reportId);
+    } catch (err) { alert('Error al cargar el informe: ' + (err.message || err)); }
+    return;
+  }
   showLoadingOverlay(name);
   try {
     const url = await storage.ref(storagePath).getDownloadURL();
-    const opts = admin
-      ? { watermark: false, noPrint: false, noDownload: false, noCopy: false }
-      : mergeOpts(myAccessOptions[reportId]);
     await openViewer(url, name, opts, currentUser && currentUser.email, reportId);
   } catch (err) {
     alert('Error al cargar el informe: ' + (err.message || err));
@@ -3815,19 +4197,139 @@ function freshUrl(url) {
   return url + (url.includes('?') ? '&' : '?') + 'v=' + Date.now();
 }
 
-async function openViewer(url, name, opts, viewerEmail, reportId) {
-  url = freshUrl(url);
+/* ── Informes encriptados (cifrado.js: OpenPGP simétrico, igual que `gpg -c`) ──
+   El módulo (y OpenPGP.js, en vendor/) se carga recién cuando hace falta. La
+   clave de sesión de cada informe abierto queda en memoria (reportId →
+   sessionKey) mientras dure la pestaña, para no volver a pedir la clave; se
+   vacía al cerrar sesión. La clave y la clave de sesión nunca se escriben en
+   Firestore, localStorage/sessionStorage ni la consola. */
+let _cifradoMod = null;
+function cifrado() { return _cifradoMod || (_cifradoMod = import('/cifrado.js')); }
+
+// Bytes actuales (sin caché) de un archivo de reports/ por su ruta de Storage.
+async function reportBytes(storagePath) {
+  const url = await storage.ref(storagePath).getDownloadURL();
+  return new Uint8Array(await fetchBytes(freshUrl(url)));
+}
+
+// Modal de clave. `intentar(clave)` descifra y devuelve el resultado; si tira
+// 'clave-incorrecta' el modal queda abierto para reintentar (sin volver a bajar
+// el archivo). Resuelve con el resultado, o null si se cancela.
+function askReportKey(name, intentar, text) {
+  closeKeyModal();
+  return new Promise(resolve => {
+    const m = document.createElement('div');
+    m.className = 'modal-backdrop'; m.id = 'key-modal';
+    m.style.zIndex = 260;   // por encima del visor y de los otros diálogos
+    m.innerHTML = `<div class="modal-box" style="max-width:430px">
+      <div class="modal-head"><span class="modal-title">🔒 Informe encriptado</span></div>
+      <div class="modal-body">
+        <p style="font-size:.85rem;color:var(--gray);font-weight:500;margin:0 0 .85rem">
+          ${text || `Ingresá la clave de <b>${esc(name)}</b> para verlo.`}</p>
+        <div id="key-alert" class="hidden"></div>
+        <input type="password" id="key-input" autocomplete="off" placeholder="Clave del informe" />
+        <div style="display:flex;gap:.5rem;justify-content:flex-end;margin-top:.9rem">
+          <button class="btn btn-outline btn-sm" id="key-cancel">Cancelar</button>
+          <button class="btn btn-orange btn-sm" id="key-ok">Abrir</button>
+        </div>
+      </div></div>`;
+    document.body.appendChild(m);
+    const inp = m.querySelector('#key-input'), ok = m.querySelector('#key-ok'), cancel = m.querySelector('#key-cancel');
+    const finish = (r) => { closeKeyModal(); resolve(r); };
+    const submit = async () => {
+      const pw = inp.value;
+      if (!pw) { inp.focus(); return; }
+      ok.disabled = cancel.disabled = inp.disabled = true;
+      showAlert('key-alert', 'success', '⏳ Descifrando…');
+      try { finish(await intentar(pw)); }
+      catch (e) {
+        ok.disabled = cancel.disabled = inp.disabled = false;
+        showAlert('key-alert', 'error', e && e.code === 'clave-incorrecta'
+          ? '❌ Clave incorrecta'
+          : '❌ ' + esc((e && e.message) || 'No se pudo descifrar el informe.'));
+        inp.select(); inp.focus();
+      }
+    };
+    ok.onclick = submit;
+    cancel.onclick = () => finish(null);
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
+    setTimeout(() => inp.focus(), 50);
+  });
+}
+function closeKeyModal() { const m = el('key-modal'); if (m) m.remove(); }
+
+// Baja y descifra un informe encriptado: con la clave de sesión en memoria si ya
+// se abrió en esta pestaña, si no pidiendo la clave. Devuelve
+// { bytes, name, gpgBytes } (gpgBytes: el .gpg tal como está en Storage) o null
+// si el usuario cancela.
+async function decryptReport(rep) {
+  showLoadingOverlay(rep.name);
+  let data;
+  try { data = await reportBytes(rep.storagePath); }
+  finally { hideLoadingOverlay(); }
+  const C = await cifrado();
+  const out = (r) => ({ bytes: r.bytes, name: rep.name, gpgBytes: data });
+  const sk = _sessionKeys.get(rep.id);
+  if (sk) {
+    try { return out(await C.descifrar(data, sk)); }
+    catch (e) { _sessionKeys.delete(rep.id); }   // el archivo cambió: se vuelve a pedir la clave
+  }
+  return askReportKey(rep.name, async pw => {
+    const r = await C.descifrarConPassword(data, pw);
+    _sessionKeys.set(rep.id, r.sessionKey);
+    return out(r);
+  });
+}
+
+// Nombre sin la extensión .gpg/.pgp (informe.html.gpg → informe.html).
+const GPG_RE = /\.(gpg|pgp)$/i;
+function stripGpg(name) { return String(name).replace(GPG_RE, ''); }
+
+// Descarga bytes en memoria con un nombre. Se usa application/octet-stream y el
+// atributo download: así nunca se navega a la blob: URL (un HTML descifrado
+// abierto como página tendría el origen del portal).
+function saveBytes(bytes, name) {
+  const u = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
+  const a = document.createElement('a');
+  a.href = u; a.download = name || 'archivo';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(u), 5000);
+}
+
+// blob: URLs creadas por el visor; se revocan al cerrarlo.
+let _viewerBlobUrls = [];
+let _viewerMem = null;   // { bytes, name, gpgBytes } del informe descifrado que muestra el visor
+function viewerBlobUrl(bytes, type) {
+  const u = URL.createObjectURL(new Blob([bytes], { type: type || 'application/octet-stream' }));
+  _viewerBlobUrls.push(u);
+  return u;
+}
+function downloadViewerMem() { if (_viewerMem) saveBytes(_viewerMem.bytes, _viewerMem.name); }
+function downloadViewerGpg() { if (_viewerMem && _viewerMem.gpgBytes) saveBytes(_viewerMem.gpgBytes, _viewerMem.name + '.gpg'); }
+
+// `src` es la URL de Storage (como siempre) o, para un informe encriptado ya
+// descifrado, { bytes, name, gpgBytes? }: el contenido en memoria. El visor se
+// elige con fileKind(name), con el nombre sin .gpg.
+async function openViewer(src, name, opts, viewerEmail, reportId) {
+  const mem = (src && typeof src === 'object') ? src : null;
+  let url = mem ? null : freshUrl(src);
   opts = mergeOpts(opts);
   const ext = extOf(name);
   const kind = fileKind(name);
+  _viewerMem = mem ? { bytes: mem.bytes, name, gpgBytes: mem.gpgBytes || null } : null;
+  if (mem) url = viewerBlobUrl(mem.bytes, kind === 'html' ? 'text/html' : guessContentType(name));
 
   const vw = document.createElement('div');
   vw.className = 'viewer' + (opts.noCopy ? ' no-copy' : '');
   vw.id = 'viewer';
   if (opts.noCopy) { vw.oncontextmenu = () => false; vw.ondragstart = () => false; }
 
-  const dlLink = opts.noDownload ? '' :
-    `<a href="${url}" target="_blank" rel="noopener" class="btn btn-outline-dark btn-sm">↗ Abrir / Descargar</a>`;
+  // Encriptado: "Descargar" (descifrado) y "Descargar cifrado (.gpg)", que se
+  // abre con `gpg -d` y la clave. Con noDownload, ninguna de las dos.
+  const dlLink = opts.noDownload ? '' : mem
+    ? `<button class="btn btn-outline-dark btn-sm" onclick="downloadViewerMem()">⬇ Descargar</button>` +
+      (mem.gpgBytes ? `<button class="btn btn-outline-dark btn-sm" onclick="downloadViewerGpg()" title="El archivo cifrado: se abre con gpg -d y la clave">🔐 Descargar cifrado (.gpg)</button>` : '')
+    : `<a href="${url}" target="_blank" rel="noopener" class="btn btn-outline-dark btn-sm">↗ Abrir / Descargar</a>`;
 
   // En modo enlace público no hay "atrás": mostramos una etiqueta en su lugar.
   const backBtn = _publicMode
@@ -3837,7 +4339,7 @@ async function openViewer(url, name, opts, viewerEmail, reportId) {
   vw.innerHTML = `
     <div class="viewer-bar">
       ${backBtn}
-      <div class="viewer-title">${fileIcon(name)} ${esc(name)}</div>
+      <div class="viewer-title">${fileIcon(name)} ${esc(name)}${mem ? ' <span class="enc-tag" title="Informe encriptado">🔒</span>' : ''}</div>
       ${dlLink}
     </div>
     <div class="viewer-content" id="viewer-content">
@@ -3850,29 +4352,37 @@ async function openViewer(url, name, opts, viewerEmail, reportId) {
 
   try {
     if (kind === 'html') {
-      content.innerHTML = `<iframe class="viewer-frame" src="${url}" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>`;
+      // HTML descifrado: la blob: URL tiene el origen del PORTAL, así que va SIN
+      // allow-same-origin (origen opaco). Si no, el JS del informe podría leer la
+      // sesión de Firebase del usuario (IndexedDB) y operar con sus permisos.
+      // postMessage (parámetros y analítica) funciona igual con origen opaco.
+      const sandbox = mem ? 'allow-scripts allow-forms allow-popups' : 'allow-scripts allow-same-origin allow-forms allow-popups';
+      content.innerHTML = `<iframe class="viewer-frame" src="${url}" sandbox="${sandbox}"></iframe>`;
       const ifr = content.querySelector('iframe');
       setupDashboardAnalytics(ifr, reportId, name);
       setupPortalParams(ifr);
     } else if (kind === 'video') {
       renderVideo(url, content, opts);
     } else if (ext === 'pdf') {
-      await renderPdf(url, content);
+      await renderPdf(mem ? mem.bytes.slice() : url, content);
     } else if (ext === 'docx') {
-      await renderDocx(url, content);
+      await renderDocx(mem ? mem.bytes.slice() : url, content);
     } else if (ext === 'pptx') {
       await renderPptx(url, content);
-    } else if (kind === 'download') {
-      // Formato sin visor: se ofrece la descarga (respetando "bloquear descarga").
+    } else if (kind === 'download' || mem) {
+      // Formato sin visor (o .doc/.ppt descifrado): se ofrece la descarga
+      // (respetando "bloquear descarga").
       content.innerHTML = downloadOnlyView(name, opts);
       const btn = content.querySelector('#viewer-dl-btn');
-      if (btn) btn.onclick = () => downloadBlobUrl(url, name);
+      if (btn) btn.onclick = () => mem ? downloadViewerMem() : downloadBlobUrl(url, name);
     } else {
       content.innerHTML = legacyFallback(name, url, opts);  // .doc / .ppt antiguos
     }
   } catch (err) {
     console.error('Error al renderizar el documento:', err);
-    content.innerHTML = renderErrorHTML(err, url, opts);
+    content.innerHTML = renderErrorHTML(err, mem ? null : url, opts);
+    const btn = mem && !opts.noDownload && content.querySelector('#viewer-dl-btn');
+    if (btn) btn.onclick = downloadViewerMem;
   }
 }
 
@@ -3880,6 +4390,9 @@ function closeViewer() {
   teardownProtections();
   const v = document.getElementById('viewer');
   if (v) v.remove();
+  _viewerBlobUrls.forEach(u => URL.revokeObjectURL(u));
+  _viewerBlobUrls = [];
+  _viewerMem = null;
 }
 
 // Recibe los eventos de analítica que el dashboard (iframe) manda por postMessage
@@ -3987,10 +4500,11 @@ function renderVideo(url, content, opts) {
     </video>
   </div>`;
 }
-async function renderPdf(url, content) {
+// renderPdf / renderDocx reciben la URL o los bytes ya en memoria (informe descifrado).
+async function renderPdf(src, content) {
   await loadScript(LIB.pdf);
   window.pdfjsLib.GlobalWorkerOptions.workerSrc = LIB.pdfWorker;
-  const data = await fetchBytes(url);
+  const data = typeof src === 'string' ? await fetchBytes(src) : src;
   const pdf = await window.pdfjsLib.getDocument({ data }).promise;
   content.innerHTML = '';
   const wrap = document.createElement('div'); wrap.className = 'pdf-pages'; content.appendChild(wrap);
@@ -4004,11 +4518,11 @@ async function renderPdf(url, content) {
     await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
   }
 }
-async function renderDocx(url, content) {
+async function renderDocx(src, content) {
   await useJSZip(LIB.jszip3, '__jszip3');   // docx-preview requiere JSZip 3.x
   await loadScript(LIB.docx);
   window.JSZip = window.__jszip3;            // asegurar 3.x al renderizar
-  const data = await fetchBytes(url);
+  const data = typeof src === 'string' ? await fetchBytes(src) : src;
   content.innerHTML = '';
   const target = document.createElement('div'); target.className = 'docx-wrap'; content.appendChild(target);
   await window.docx.renderAsync(data, target);
@@ -4060,11 +4574,13 @@ function downloadOnlyView(name, opts) {
     ${dl}
   </div>`;
 }
+// Sin url (informe descifrado en memoria) el botón de descarga se cablea afuera.
 function renderErrorHTML(err, url, opts) {
   const msg = String(err && err.message || err);
   const isCors = /Failed to fetch|NetworkError|CORS|TypeError/i.test(msg);
-  const dl = opts.noDownload ? '' :
-    `<a class="btn btn-orange" href="${url}" target="_blank" rel="noopener">⬇ Descargar archivo</a>`;
+  const dl = opts.noDownload ? '' : !url
+    ? `<button id="viewer-dl-btn" class="btn btn-orange">⬇ Descargar archivo</button>`
+    : `<a class="btn btn-orange" href="${url}" target="_blank" rel="noopener">⬇ Descargar archivo</a>`;
   return `<div class="empty" style="padding:3rem">
     <div class="empty-icon">⚠️</div>
     <p><strong>No se pudo mostrar el documento en el visor.</strong></p>

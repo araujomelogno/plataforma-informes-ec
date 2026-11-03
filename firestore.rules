@@ -30,11 +30,16 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
-    // ── Colección: reports (metadata de los HTMLs) ──
-    // Todos los usuarios autenticados pueden leer (para mostrar nombre/fecha).
-    // Solo el admin puede crear/modificar/eliminar.
+    // ── Colección: reports (metadata de los informes) ──
+    // Un cliente solo puede leer (get) los informes que tiene asignados en
+    // userAccess/{uid}.reportIds; listar la colección es solo del admin. Antes
+    // cualquier usuario con login podía listar todos y obtener su storagePath.
+    // Si userAccess/{uid} no existe, el get() falla y la regla niega (el portal
+    // lo tolera). Solo el admin puede crear/modificar/eliminar.
     match /reports/{reportId} {
-      allow read:  if isAuth();
+      allow get:   if isAdmin() || (isAuth() &&
+        reportId in get(/databases/$(database)/documents/userAccess/$(request.auth.uid)).data.get('reportIds', []));
+      allow list:  if isAdmin();
       allow write: if isAdmin();
     }
 
@@ -56,15 +61,18 @@ service cloud.firestore {
     }
 
     // ── Colección: publicLinks (enlaces públicos a informes) ──
-    // Lectura ABIERTA a cualquiera (sin login): así el enlace público funciona
-    // desde cualquier navegador. El documento solo guarda la URL de descarga
-    // (ya pública por su token) y el nombre del informe.
+    // Lectura de UN enlace (get) abierta a cualquiera (sin login): así el enlace
+    // público funciona desde cualquier navegador conociendo su token. Listar la
+    // colección es solo del admin: si no, cualquiera podía obtener las URLs de
+    // todos los enlaces. El documento guarda la URL de descarga (pública por su
+    // token) y el nombre del informe; nunca la clave de un informe encriptado.
     // Crear / eliminar: solo el admin.
     // Actualizar: el admin puede todo; un visitante anónimo SOLO puede sumar 1
     // al contador de accesos y refrescar la fecha del último acceso (no puede
     // tocar la URL, el nombre ni desactivar el enlace).
     match /publicLinks/{token} {
-      allow read:   if true;
+      allow get:    if true;
+      allow list:   if isAdmin();
       allow create: if isAdmin();
       allow delete: if isAdmin();
       allow update: if isAdmin() || (

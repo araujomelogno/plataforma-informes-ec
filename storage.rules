@@ -2,18 +2,31 @@ rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
 
+    // Admin = rol en Firestore (users/{uid}.role).
+    function isAdminSt() {
+      return request.auth != null &&
+        firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
     // Solo archivos dentro de /reports/
     match /reports/{fileName} {
 
-      // Cualquier usuario autenticado puede leer (descargar) los informes.
-      // Se admite cualquier tipo de archivo: los formatos con visor se muestran
-      // inline y el resto se descarga; las reglas no restringen por extensión.
-      allow read: if request.auth != null;
+      // Lectura (getDownloadURL): el admin, o un cliente que tiene el informe
+      // asignado. Cada objeto lleva en su metadata personalizada el id de su doc
+      // en Firestore (metadata.reportId, lo pone el portal al subir/reescribir y
+      // scripts/etiquetar_informes.py en los archivos viejos), y se cruza con
+      // userAccess/{uid}.reportIds. Un archivo sin etiqueta solo lo lee el admin.
+      // Se admite cualquier tipo de archivo; las reglas no restringen por extensión.
+      allow read: if request.auth != null && (
+        isAdminSt() ||
+        (resource.metadata.reportId is string &&
+         firestore.exists(/databases/(default)/documents/userAccess/$(request.auth.uid)) &&
+         resource.metadata.reportId in
+           firestore.get(/databases/(default)/documents/userAccess/$(request.auth.uid)).data.get('reportIds', []))
+      );
 
       // Solo el admin puede subir o eliminar archivos
-      // Se verifica el rol en Firestore
-      allow write: if request.auth != null &&
-        firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'admin';
+      allow write: if isAdminSt();
     }
 
     // Documentos subidos por los usuarios cliente: cada uno en su propia carpeta.

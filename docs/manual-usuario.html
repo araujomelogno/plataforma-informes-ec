@@ -68,6 +68,8 @@
   ul.dots { margin:.5rem 0; padding-left:1.2rem; }
   ul.dots li { margin:.3rem 0; }
   code { background:#f0ecea; padding:.1rem .35rem; border-radius:4px; font-size:.86em; }
+  pre { background:#f0ecea; padding:.6rem .8rem; border-radius:6px; overflow-x:auto; margin:.4rem 0 .9rem; }
+  pre code { background:none; padding:0; }
   .kbd { background:var(--dark); color:#fff; border-radius:5px; padding:.12rem .45rem; font-size:.8em; font-weight:700; }
 
   figure { margin:1.1rem 0 1.6rem; }
@@ -137,6 +139,7 @@
       <li><a href="#a-correos">Configuración → Correos</a></li>
       <li><a href="#a-matriz">Matriz usuarios / informes</a></li>
       <li><a href="#a-mis-informes">Mis informes (para administradores)</a></li>
+      <li><a href="#a-encriptados">Informes encriptados con clave</a></li>
     </ol>
     <div class="part">Parte 2 · Cliente</div>
     <ol>
@@ -144,6 +147,7 @@
       <li><a href="#c-navegar">Ver mis informes y carpetas</a></li>
       <li><a href="#c-abrir">Abrir un informe</a></li>
       <li><a href="#c-avisos">Avisos por correo</a></li>
+      <li><a href="#c-encriptados">Informes con clave (🔒)</a></li>
     </ol>
   </nav>
 
@@ -199,12 +203,16 @@
   <ul class="dots">
     <li>El archivo nuevo debe ser del <b>mismo tipo</b> (una web HTML se reemplaza con HTML, etc.).</li>
     <li>Si el informe tenía un enlace público, se <b>actualiza automáticamente</b> para que siga funcionando.</li>
+    <li>Si el informe está <b>encriptado</b> (🔒), te pide su clave y el archivo nuevo se encripta con la misma: los
+        clientes lo siguen abriendo con la misma clave y el enlace público no cambia (punto 16).</li>
   </ul>
 
   <h3 id="a-publico">6. Enlace público</h3>
   <p>Con <span class="tag">🔗 Link público</span> generás un enlace que permite ver ese informe <b>sin iniciar sesión</b>,
   desde cualquier navegador. Podés copiarlo, abrirlo, ver cuántos accesos tuvo y <b>desactivarlo</b> cuando quieras.</p>
   <div class="warn">Cualquiera con el enlace puede ver el informe. Usalo solo para material que pueda ser público.</div>
+  <p>Para un informe <b>encriptado</b> el enlace lleva la clave del archivo y se genera ingresando la clave del informe
+  (ver punto 16).</p>
 
   <h3 id="a-usuarios-informe">7. Asignar usuarios a un informe</h3>
   <p>Desde la propia lista de informes, el botón <span class="tag">👥 Usuarios</span> abre un diálogo para elegir
@@ -431,6 +439,78 @@
     <figcaption>«Mis informes»: los informes asignados al administrador, dentro de sus carpetas.</figcaption>
   </figure>
 
+  <h3 id="a-encriptados">16. Informes encriptados con clave</h3>
+  <p>Para informes sensibles (datos de un cliente puntual, resultados antes de publicarse) podés <b>encriptarlos</b>:
+  el archivo se cifra antes de subirlo y solo se ve ingresando una <b>clave</b>. Aunque el archivo se filtre (un enlace
+  copiado, un acceso mal asignado, una cuenta comprometida), sin la clave no se puede leer. Ni el portal ni Google
+  guardan la clave.</p>
+  <p>El archivo cifrado es un <b>.gpg</b> estándar (OpenPGP, igual que <code>gpg -c</code>): además de verse en el
+  portal, se abre en cualquier computadora con <b>gpg</b> y la misma clave, aunque el portal no esté disponible.</p>
+  <h4>Subir un informe encriptado desde el portal</h4>
+  <ol class="steps">
+    <li>En <b>Subir nuevo informe</b>, tildá <span class="tag">🔒 Encriptar con clave</span>.</li>
+    <li>Escribí la clave dos veces (mínimo <b>10 caracteres</b>), o tocá <span class="tag">🎲 Generar clave</span> para
+        que el portal proponga una (20 caracteres en grupos de 4). Con <span class="tag">📋 Copiar</span> la copiás.</li>
+    <li>Subí el archivo como siempre. Si subís varios a la vez, todos usan la misma clave.</li>
+    <li>Al terminar aparece el aviso «Guardá la clave: no se puede recuperar». En la lista, el informe muestra
+        <b>🔒</b> junto al nombre.</li>
+  </ol>
+  <ul class="dots">
+    <li><b>Video</b> no se puede encriptar, ni archivos de <b>más de 100 MB</b>: el portal te avisa y te deja elegir
+        entre subirlos sin encriptar o dejarlos afuera.</li>
+    <li>Asignalo a los usuarios como cualquier otro informe. Las protecciones (marca de agua, impresión, descarga,
+        copia), los parámetros y la analítica funcionan igual.</li>
+  </ul>
+  <h4>Subir un .gpg cifrado en tu máquina</h4>
+  <p>Si preferís que el portal nunca vea el original, cifralo vos con gpg y subí el <code>.gpg</code> (sin tildar
+  nada): el portal lo reconoce, no pide clave y lo muestra con el nombre sin <code>.gpg</code>.</p>
+  <pre><code>gpg -c --cipher-algo AES256 --s2k-digest-algo SHA256 --s2k-count 65011712 informe.html</code></pre>
+  <p>gpg te pide la clave dos veces y genera <code>informe.html.gpg</code>.</p>
+  <ul class="dots">
+    <li>Tiene que estar cifrado <b>con contraseña</b> (<code>gpg -c</code>). Uno cifrado para la clave GPG de una
+        persona (<code>gpg -e</code>) se rechaza y no se sube.</li>
+    <li>Un archivo terminado en <code>.gpg</code> que no es OpenPGP se sube como archivo común, con un aviso.</li>
+  </ul>
+  <h4>Ver y descargar</h4>
+  <ul class="dots">
+    <li><span class="tag">👁 Ver</span> y <span class="tag">⬇ Descargar</span> te piden la clave; la descarga es el
+        archivo ya descifrado, con su nombre original.</li>
+    <li><span class="tag">🔐 Descargar cifrado (.gpg)</span> baja el archivo tal como está guardado. Los clientes tienen
+        las mismas dos descargas en el visor, salvo que les bloquees la descarga.</li>
+  </ul>
+  <h4>Descifrar con gpg</h4>
+  <pre><code>gpg -d informe.html.gpg &gt; informe.html</code></pre>
+  <p>gpg pide la clave del informe. Si no tenés gpg: en Windows instalá <b>Gpg4win</b> (gpg4win.org); en Mac,
+  <b>GPG Suite</b> (gpgtools.org) o <code>brew install gnupg</code>; en Linux ya viene instalado.</p>
+  <h4>Reescribir un informe encriptado</h4>
+  <ul class="dots">
+    <li>Con <span class="tag">🔄 Reescribir</span> y el archivo nuevo sin cifrar: el portal te pide la clave y lo
+        encripta con la misma. Los clientes lo abren con la misma clave y <b>el enlace público no cambia</b>.</li>
+    <li>Con un <code>.gpg</code> nuevo hecho en tu máquina: el portal te avisa que <b>el enlace público cambia</b> y, al
+        terminar, te pide la clave para mostrarte el enlace nuevo. Volvé a enviarlo.</li>
+  </ul>
+  <h4>Cómo enviar la clave</h4>
+  <div class="warn">Enviá la clave al cliente <b>por un canal distinto</b> al correo de aviso del portal (WhatsApp,
+  llamada, otro correo). Si la clave viaja junto con el aviso, quien acceda a ese correo tiene todo.</div>
+  <h4>Si se pierde la clave</h4>
+  <p><b>No hay forma de recuperarla</b>: es así por diseño. Conservá el archivo original: si se pierde la clave, borrá el
+  informe y volvé a subirlo con una clave nueva (y volvé a asignarlo).</p>
+  <h4>Enlace público de un informe encriptado</h4>
+  <ol class="steps">
+    <li>Tocá <span class="tag">🔗 Link público</span>, ingresá la clave del informe y generá el enlace.</li>
+    <li>El enlace termina en <code>#k=…</code>: es la <b>clave de sesión</b> del archivo (no tu clave). Esa parte
+        <b>nunca llega al servidor</b> y no queda guardada en ningún lado. Quien abre el enlace completo ve el informe
+        sin escribir nada.</li>
+    <li>Si después volvés a abrir el diálogo, el portal te pide la clave para mostrarte el enlace completo (es el mismo
+        de antes). Las estadísticas de accesos se ven igual.</li>
+  </ol>
+  <ul class="dots">
+    <li>Si alguien abre el enlace <b>sin</b> la parte <code>#k=…</code>, el portal le pide la clave del informe.</li>
+    <li>En el diálogo, «Descifrar en tu máquina con gpg» muestra el comando para abrir el <code>.gpg</code> con la clave
+        de sesión (<code>gpg --override-session-key '9:…' -d</code>), sin la clave del informe.</li>
+    <li>Compartí el enlace completo solo con quien tenga que verlo: con el <code>#k=…</code> no hace falta la clave.</li>
+  </ul>
+
   <!-- ══════════════════════ PARTE 2 · CLIENTE ══════════════════════ -->
   <h2 class="part-title"><span class="n">Parte 2</span> · Cliente</h2>
 
@@ -478,6 +558,24 @@
   <p>Cuando te habilitan un informe nuevo, recibís un correo de <b>notificaciones@equipos.com.uy</b> con el nombre del
   informe (o la lista, si son varios), la carpeta donde está, hasta cuándo está disponible (si tiene vencimiento) y el
   enlace al portal. Ingresá al portal para verlo.</p>
+
+  <h3 id="c-encriptados">5. Informes con clave (🔒)</h3>
+  <p>Algunos informes están <b>encriptados</b> y se marcan con <b>🔒</b>. Para abrirlos necesitás la <b>clave</b> que
+  te manda Equipos Consultores por un canal aparte (no viene en el correo de aviso).</p>
+  <ol class="steps">
+    <li>Hacé clic en el informe. Se abre un cuadro <b>«🔒 Informe encriptado»</b>.</li>
+    <li>Escribí la clave y tocá <b>Abrir</b>. Si dice «Clave incorrecta», revisala y probá de nuevo.</li>
+  </ol>
+  <ul class="dots">
+    <li>Mientras no cierres la pestaña ni la sesión, al volver a abrir el mismo informe no te la vuelve a pedir.</li>
+    <li>Si la descarga está habilitada, en el visor tenés <b>⬇ Descargar</b> (el archivo ya abierto) y
+        <b>🔐 Descargar cifrado (.gpg)</b>, para guardarlo o reenviarlo protegido. El <code>.gpg</code> se abre con
+        <code>gpg -d informe.html.gpg &gt; informe.html</code> y la misma clave (gpg: <b>Gpg4win</b> en Windows,
+        <b>GPG Suite</b> o <code>brew install gnupg</code> en Mac, ya instalado en Linux).</li>
+    <li>Si no tenés la clave o la perdiste, pedila a Equipos Consultores: el portal no la guarda y no la puede mostrar.</li>
+    <li>Si te pasaron un <b>enlace público</b> de un informe encriptado, abrilo completo (con la parte que sigue a
+        <code>#</code>) y se ve sin escribir nada. Si te pide la clave, es que el enlace llegó cortado.</li>
+  </ul>
 
   <footer>
     Equipos Consultores · Portal de Informes — Manual de usuario.<br>
