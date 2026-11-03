@@ -1,0 +1,8 @@
+{
+  "name": "tests-cifrado",
+  "private": true,
+  "description": "Tests de cifrado.js (OpenPGP simétrico, compatible con gpg). Node 22+, sin dependencias; usa gpg si está instalado.",
+  "scripts": {
+    "test": "node --test cifrado.test.mjs"
+  }
+}

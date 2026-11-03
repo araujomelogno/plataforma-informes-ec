@@ -3,8 +3,14 @@
 
 No requiere backend ni Cloud Functions: se autentica como un usuario administrador
 del portal, sube el archivo nuevo a la MISMA ruta de Storage del informe (lo
-sobrescribe) y, si ese informe tiene un enlace público, refresca su URL para que
-siga funcionando.
+sobrescribe), le vuelve a poner la etiqueta metadata.reportId (sin ella las reglas
+de Storage no dejan abrirlo a los clientes) y, si ese informe tiene un enlace
+público, refresca su URL para que siga funcionando.
+
+Los informes encriptados (OpenPGP) solo se sobrescriben con un .gpg cifrado con
+contraseña (`gpg -c`); nunca con texto plano. Con un .gpg nuevo cambia la clave
+de sesión: si el informe tiene enlace público, hay que regenerarlo desde el portal
+(o reescribir el informe desde el portal, que la conserva).
 
 Solo usa la librería estándar de Python 3 (no hace falta `pip install`).
 
@@ -113,6 +119,7 @@ def list_reports(idtoken):
                 "name": f.get("name", ""),
                 "storagePath": f.get("storagePath", ""),
                 "publicToken": f.get("publicToken"),
+                "encrypted": bool(f.get("encrypted")),
             })
         page = d.get("nextPageToken")
         if not page:
@@ -129,6 +136,47 @@ def overwrite_file(storage_path, file_bytes, content_type, idtoken):
         headers={"Authorization": f"Firebase {idtoken}", "Content-Type": content_type},
         method="POST",
     )
+
+
+def get_metadata(storage_path, idtoken):
+    """Metadata del objeto en Storage, o None si no existe (404)."""
+    name = urllib.parse.quote(storage_path, safe="")
+    req = urllib.request.Request(f"{STOR}/{name}", headers={"Authorization": f"Firebase {idtoken}"})
+    try:
+        with urllib.request.urlopen(req) as resp:
+            return json.loads(resp.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None
+        detail = e.read().decode(errors="replace")
+        raise SystemExit(f"❌ Error HTTP {e.code} al leer la metadata de {storage_path}\n{detail}")
+    except urllib.error.URLError as e:
+        raise SystemExit(f"❌ Error de conexión con Storage: {e.reason}")
+
+
+def tag_report_id(storage_path, report_id, idtoken, content_type=None):
+    """Pone metadata.reportId en el objeto (la regla de Storage la cruza con
+    userAccess/{uid}.reportIds). El PATCH agrega la clave sin tocar el resto de
+    la metadata ni el token de descarga; con content_type, también lo fija.
+    Devuelve la metadata resultante."""
+    name = urllib.parse.quote(storage_path, safe="")
+    body = {"metadata": {"reportId": report_id}}
+    if content_type:
+        body["contentType"] = content_type
+    return _request(
+        f"{STOR}/{name}",
+        data=body,
+        headers={"Authorization": f"Firebase {idtoken}"},
+        method="PATCH",
+    )
+
+
+def first_packet_tag(data):
+    """Tag del primer paquete OpenPGP (formato nuevo u viejo), o None si no lo es."""
+    if not data or not data[0] & 0x80:
+        return None
+    b = data[0]
+    return (b & 0x3F) if b & 0x40 else ((b >> 2) & 0x0F)
 
 
 def build_download_url(storage_path, token):
@@ -182,7 +230,7 @@ def main():
         print(f"{'ID':<24}  {'NOMBRE'}")
         print("-" * 60)
         for r in reports:
-            flag = "  🔗 público" if r["publicToken"] else ""
+            flag = ("  🔒 encriptado" if r["encrypted"] else "") + ("  🔗 público" if r["publicToken"] else "")
             print(f"{r['id']:<24}  {r['name']}{flag}")
         return
 
@@ -200,12 +248,32 @@ def main():
         sys.exit("❌ El informe no tiene 'storagePath'. Verificá el --report-id.")
     public_token = fields.get("publicToken")
 
-    # 2) Sobrescribir el archivo en la misma ruta
+    encrypted = bool(fields.get("encrypted"))
     with open(args.file, "rb") as fh:
         data = fh.read()
-    content_type = mimetypes.guess_type(args.file)[0] or "text/html"
+
+    # Un informe encriptado nunca se sobrescribe con texto plano: solo con un .gpg
+    # cifrado con contraseña (empieza con un paquete SKESK, tag 3).
+    if encrypted:
+        if not args.file.lower().endswith((".gpg", ".pgp")):
+            sys.exit("❌ Informe encriptado: pasá un .gpg cifrado con gpg -c, o reescribilo desde el portal (🔄 Reescribir).")
+        if first_packet_tag(data) != 3:
+            sys.exit("❌ El .gpg no está cifrado con contraseña (no empieza con un paquete SKESK). Ciframelo con gpg -c.")
+
+    # 2) Sobrescribir el archivo en la misma ruta
+    content_type = "application/pgp-encrypted" if encrypted else (mimetypes.guess_type(args.file)[0] or "text/html")
     meta = overwrite_file(storage_path, data, content_type, idtoken)
     print(f"✅ Informe sobrescrito: '{fields.get('name', storage_path)}'  ({len(data)} bytes, {content_type})")
+
+    # 2b) Al sobrescribir, Storage reemplaza la metadata: sin la etiqueta
+    # reportId los clientes con acceso ya no podrían abrirlo. La volvemos a poner
+    # y verificamos con un GET.
+    tag_report_id(storage_path, args.report_id, idtoken, content_type)
+    check = get_metadata(storage_path, idtoken) or {}
+    if (check.get("metadata") or {}).get("reportId") != args.report_id:
+        sys.exit("❌ El archivo se sobrescribió pero no quedó la etiqueta reportId: los clientes no "
+                 "podrán abrirlo. Corré scripts/etiquetar_informes.py para corregirlo.")
+    print("🏷  Etiqueta reportId verificada (los usuarios con acceso lo siguen abriendo).")
 
     # 3) Actualizar el tamaño en la metadata del informe (columna 'Tamaño' del panel)
     try:
@@ -215,11 +283,15 @@ def main():
 
     # 4) Si tiene enlace público, refrescar su URL (el token de descarga cambió al sobrescribir)
     if public_token:
-        tokens = str(meta.get("downloadTokens", "") or "")
+        tokens = str(check.get("downloadTokens") or meta.get("downloadTokens") or "")
         token = tokens.split(",")[0] if tokens else ""
         if token:
             patch_public_link_url(public_token, build_download_url(storage_path, token), idtoken)
-            print("🔗 Enlace público actualizado (sigue funcionando con el contenido nuevo).")
+            if encrypted:
+                print("🔗 Enlace público apuntado al archivo nuevo. ⚠ El .gpg nuevo tiene otra clave de sesión: el #k= "
+                      "del enlace ya no sirve. Regeneralo desde el portal (🔗 Link público, con la clave) y volvé a enviarlo.")
+            else:
+                print("🔗 Enlace público actualizado (sigue funcionando con el contenido nuevo).")
         else:
             print("⚠ No se obtuvo el token de descarga nuevo. Regenerá el enlace público "
                   "desde el panel de administración para que apunte al contenido actualizado.")

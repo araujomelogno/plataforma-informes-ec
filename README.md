@@ -9,6 +9,10 @@ en el tramo gratuito, ver [despliegue](docs/DESPLIEGUE_alta_usuarios_correo.md#1
 > (funciones, secreto SMTP, reglas, índices, verificación y rollback) está en
 > [`docs/DESPLIEGUE_alta_usuarios_correo.md`](docs/DESPLIEGUE_alta_usuarios_correo.md).
 
+> 🔒 **Cierre de acceso a archivos e informes encriptados:** el orden de despliegue (etiquetar los
+> archivos **antes** de desplegar las reglas), la verificación y el rollback están en
+> [`docs/DESPLIEGUE_cierre_acceso_y_encriptacion.md`](docs/DESPLIEGUE_cierre_acceso_y_encriptacion.md).
+
 ---
 
 ## ✅ Requisitos previos
@@ -65,6 +69,10 @@ en el tramo gratuito, ver [despliegue](docs/DESPLIEGUE_alta_usuarios_correo.md#1
 1. En Storage → pestaña **Reglas**
 2. Borrá el contenido y pegá todo el archivo `storage.rules`
 3. Clic en **Publicar**
+
+> Alternativa (CLI): `firebase deploy --only storage`. Las reglas cruzan la metadata `reportId` de cada
+> archivo con los permisos del usuario: en un proyecto con informes ya cargados, primero corré
+> `scripts/etiquetar_informes.py` (ver el despliegue de cierre de acceso).
 
 ---
 
