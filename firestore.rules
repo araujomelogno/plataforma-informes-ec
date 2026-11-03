@@ -31,24 +31,37 @@ service cloud.firestore {
     }
 
     // ── Colección: reports (metadata de los informes) ──
-    // Un cliente solo puede leer (get) los informes que tiene asignados en
-    // userAccess/{uid}.reportIds; listar la colección es solo del admin. Antes
-    // cualquier usuario con login podía listar todos y obtener su storagePath.
-    // Si userAccess/{uid} no existe, el get() falla y la regla niega (el portal
-    // lo tolera). Solo el admin puede crear/modificar/eliminar.
+    // Un cliente solo puede leer (get) los informes de su acceso efectivo
+    // (accesoEfectivo/{uid}.reportIds: directos + los de sus carpetas) o de sus
+    // asignaciones directas (userAccess/{uid}.reportIds), así una asignación
+    // recién hecha se ve aunque el recálculo no haya terminado. Listar la
+    // colección es solo del admin. Si el doc no existe, el get() falla y la
+    // regla niega (el portal lo tolera). Solo el admin puede escribir.
     match /reports/{reportId} {
-      allow get:   if isAdmin() || (isAuth() &&
-        reportId in get(/databases/$(database)/documents/userAccess/$(request.auth.uid)).data.get('reportIds', []));
+      allow get:   if isAdmin() || (isAuth() && (
+        reportId in get(/databases/$(database)/documents/accesoEfectivo/$(request.auth.uid)).data.get('reportIds', []) ||
+        reportId in get(/databases/$(database)/documents/userAccess/$(request.auth.uid)).data.get('reportIds', [])
+      ));
       allow list:  if isAdmin();
       allow write: if isAdmin();
     }
 
     // ── Colección: folders (carpetas para organizar informes) ──
-    // Todos los usuarios autenticados pueden leer (para navegar el árbol de
-    // carpetas). Solo el admin puede crear / modificar / eliminar carpetas.
+    // Solo el admin: los nombres de las carpetas pueden revelar a otros
+    // clientes. El cliente recibe las suyas (solo las que le corresponden) en
+    // accesoEfectivo/{uid}.carpetas.
     match /folders/{folderId} {
-      allow read:  if isAuth();
+      allow read:  if isAdmin();
       allow write: if isAdmin();
+    }
+
+    // ── Colección: accesoEfectivo (acceso ya expandido de cada usuario) ──
+    // La calcula y escribe solo la Cloud Function (Admin SDK): informes
+    // directos + los de las carpetas asignadas, sus opciones y las carpetas que
+    // navega. Cada usuario lee el suyo; el admin, todos.
+    match /accesoEfectivo/{uid} {
+      allow read:  if isAuth() && (request.auth.uid == uid || isAdmin());
+      allow write: if false;
     }
 
     // ── Colección: clientDocs (documentos subidos por los usuarios cliente) ──

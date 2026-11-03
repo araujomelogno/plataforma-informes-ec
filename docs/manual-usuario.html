@@ -140,6 +140,7 @@
       <li><a href="#a-matriz">Matriz usuarios / informes</a></li>
       <li><a href="#a-mis-informes">Mis informes (para administradores)</a></li>
       <li><a href="#a-encriptados">Informes encriptados con clave</a></li>
+      <li><a href="#a-carpetas-permisos">Permisos por carpeta</a></li>
     </ol>
     <div class="part">Parte 2 · Cliente</div>
     <ol>
@@ -511,6 +512,49 @@
     <li>Compartí el enlace completo solo con quien tenga que verlo: con el <code>#k=…</code> no hace falta la clave.</li>
   </ul>
 
+  <h3 id="a-carpetas-permisos">17. Permisos por carpeta</h3>
+  <p>Además de habilitar informes de a uno, a un usuario le podés asignar una <b>carpeta</b>: ve todos sus informes y
+  los de <b>todas sus subcarpetas</b>, también los que subas después, y recibe el aviso «Nuevo informe» igual que hoy.
+  Sirve, por ejemplo, para darle a un cliente la carpeta de su estudio y no tener que habilitar cada informe.</p>
+  <h4>Asignar una carpeta</h4>
+  <ol class="steps">
+    <li>En <b>Permisos</b>, elegí el usuario. Arriba de los informes está la sección <b>📁 Carpetas</b>, con el árbol.</li>
+    <li>Tildá la carpeta. Debajo aparecen sus protecciones y su caducidad, que valen para todos sus informes.</li>
+    <li>La casilla <b>«Avisar por correo, también cuando se suban informes nuevos a esta carpeta»</b> decide si se le
+        avisa ahora (un solo correo con todos los informes de la carpeta) y cada vez que subas uno nuevo.</li>
+  </ol>
+  <p>También podés hacerlo desde el árbol de carpetas, en <b>Informes</b>: el botón <span class="tag">👥 Usuarios</span>
+  de cada carpeta abre la lista de usuarios con un check, igual que el de cada informe. Las dos formas guardan lo mismo.</p>
+  <h4>Qué heredan las subcarpetas</h4>
+  <ul class="dots">
+    <li>Las subcarpetas de una carpeta asignada aparecen tildadas en gris con <b>«incluida por …»</b>: no se pueden
+        destildar solas. Si hay que excluir algo, reorganizá las carpetas.</li>
+    <li>En la grilla de informes, los que el usuario ve por una carpeta muestran <b>«📁 vía …»</b>. Si lo tildás, le
+        das además una asignación directa, con protecciones o caducidad propias.</li>
+    <li><b>Precedencia:</b> si un informe tiene asignación directa, valen sus protecciones y su caducidad. Si no, valen
+        las de la carpeta asignada más cercana. Destildar la asignación directa no le quita el informe si una carpeta
+        se lo sigue dando («también vía …»).</li>
+    <li>En la matriz, el acceso por carpeta se ve como <b>📁</b> y el directo como <b>✓</b>. El contador
+        <b>👤</b> de cada informe cuenta los dos.</li>
+  </ul>
+  <h4>Mover, borrar y la demora de unos segundos</h4>
+  <ul class="dots">
+    <li>Subir o mover un informe a una carpeta asignada se lo da al usuario; sacarlo se lo quita (salvo que lo tenga
+        por otra vía). Mover una carpeta, con todo lo que tiene, adentro de una asignada también se la da.</li>
+    <li>Al <b>borrar una carpeta asignada</b>, la confirmación te dice cuántos usuarios pierden acceso a su contenido.
+        Su contenido pasa a la carpeta de arriba, pero nadie gana acceso a esa carpeta de arriba.</li>
+    <li>El acceso se recalcula solo, en <b>1 a 3 segundos</b>. Si un cliente abre justo un informe recién habilitado,
+        ve «Preparando el acceso…» un momento.</li>
+    <li>En <b>Configuración → Correos → Accesos por carpeta</b>, el botón <span class="tag">🔄 Recalcular accesos</span>
+        recalcula a todos y verifica que no falte nada («0 diferencias»).</li>
+  </ul>
+  <h4>Qué ve el cliente</h4>
+  <p>El cliente navega desde <b>sus</b> carpetas: en su inicio aparecen las carpetas que le asignaste (y, para cada
+  informe suelto que le habilitaste, la carpeta donde está), <b>sin las carpetas de arriba</b>. Por ejemplo, con
+  <code>Clientes / Cliente X / Estudio 1</code> y solo «Estudio 1» asignada, ve «📁 Estudio 1» en su inicio y nunca
+  ve los nombres «Clientes» ni «Cliente X», ni en pantalla ni en los correos. Las carpetas ocultas siguen
+  funcionando igual: su contenido aparece en la carpeta visible más cercana.</p>
+
   <!-- ══════════════════════ PARTE 2 · CLIENTE ══════════════════════ -->
   <h2 class="part-title"><span class="n">Parte 2</span> · Cliente</h2>
 
@@ -534,8 +578,9 @@
   </figure>
 
   <h3 id="c-navegar">2. Ver mis informes y carpetas</h3>
-  <p>En <b>«Mis Informes»</b> ves las carpetas y los informes que te asignaron. Hacé clic en una <b>carpeta</b> para
-  entrar y ver su contenido; usá las <b>«migas de pan»</b> (🏠 Inicio › Carpeta › …) para volver.</p>
+  <p>En <b>«Mis Informes»</b> ves las carpetas y los informes que te asignaron. Si te dieron acceso a una carpeta, ves
+  todos sus informes y subcarpetas, y los informes nuevos aparecen solos, sin recargar. Hacé clic en una
+  <b>carpeta</b> para entrar y ver su contenido; usá las <b>«migas de pan»</b> (🏠 Inicio › Carpeta › …) para volver.</p>
   <figure>
     <img src="manual-img/cliente-inicio.png" alt="Inicio del cliente" />
     <figcaption>Vista del cliente: carpetas e informes asignados.</figcaption>

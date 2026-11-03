@@ -11,18 +11,20 @@ service firebase.storage {
     // Solo archivos dentro de /reports/
     match /reports/{fileName} {
 
-      // Lectura (getDownloadURL): el admin, o un cliente que tiene el informe
-      // asignado. Cada objeto lleva en su metadata personalizada el id de su doc
-      // en Firestore (metadata.reportId, lo pone el portal al subir/reescribir y
-      // scripts/etiquetar_informes.py en los archivos viejos), y se cruza con
-      // userAccess/{uid}.reportIds. Un archivo sin etiqueta solo lo lee el admin.
+      // Lectura (getDownloadURL): el admin, o un cliente que tiene el informe en
+      // su acceso efectivo. Cada objeto lleva en su metadata personalizada el id
+      // de su doc en Firestore (metadata.reportId, lo pone el portal al subir o
+      // reescribir), y se cruza con accesoEfectivo/{uid}.reportIds: directos +
+      // los de sus carpetas, ya expandidos por la Cloud Function (las reglas de
+      // Storage leen como mucho 2 documentos: users y accesoEfectivo, y no
+      // pueden recorrer el árbol). Un archivo sin etiqueta solo lo lee el admin.
       // Se admite cualquier tipo de archivo; las reglas no restringen por extensión.
       allow read: if request.auth != null && (
         isAdminSt() ||
         (resource.metadata.reportId is string &&
-         firestore.exists(/databases/(default)/documents/userAccess/$(request.auth.uid)) &&
+         firestore.exists(/databases/(default)/documents/accesoEfectivo/$(request.auth.uid)) &&
          resource.metadata.reportId in
-           firestore.get(/databases/(default)/documents/userAccess/$(request.auth.uid)).data.get('reportIds', []))
+           firestore.get(/databases/(default)/documents/accesoEfectivo/$(request.auth.uid)).data.get('reportIds', []))
       );
 
       // Solo el admin puede subir o eliminar archivos

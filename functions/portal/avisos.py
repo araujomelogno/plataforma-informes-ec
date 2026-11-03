@@ -1,34 +1,40 @@
 """R5/R8/R9 — Aviso por correo cuando un usuario gana acceso a un informe.
 
+El aviso depende del **acceso efectivo** (`accesoEfectivo/{uid}`, ver
+`permisos.py`): informes directos y los de sus carpetas asignadas. Así un
+informe subido o movido a una carpeta asignada también se avisa.
+
 Hay dos vías que encolan el mismo aviso, y una sola lo manda:
 
 1. **En el momento** (`avisar_ahora`, callable `avisarAsignacion`): el panel,
-   después de habilitar informes (desde Permisos, desde el modal "Usuarios"
-   del informe o desde la tabla de usuarios, que lleva a Permisos), espera unos
-   segundos por si se habilitan más y llama a la función, que encola y manda
-   **un solo correo** con la lista en ese momento. El admin ve el resultado.
-2. **Respaldo** (`registrar_cambio`, trigger de `userAccess/{uid}`): por cada
-   id nuevo en `reportIds` encola el aviso. Si el panel no llegó a mandarlo
-   (pestaña cerrada, red caída, cualquier vía futura que no pase por el panel),
-   la función programada `despacharAvisos` lo manda cuando vence la ventana de
-   respaldo (`config/correos.ventanaAgrupadoMin`, 2 min por defecto; con 0 lo
-   manda el mismo trigger).
+   después de habilitar informes o una carpeta, espera unos segundos por si se
+   habilitan más y llama a la función. Esta recalcula el acceso efectivo,
+   encola y manda **un solo correo** con la lista. El admin ve el resultado.
+2. **Respaldo** (`registrar_cambio`, trigger de `accesoEfectivo/{uid}`): por
+   cada id nuevo en `reportIds` encola el aviso. Si el panel no llegó a
+   mandarlo (pestaña cerrada, red caída, un informe nuevo subido a una carpeta
+   asignada), la función programada `despacharAvisos` lo manda cuando vence la
+   ventana de agrupado (`config/correos.ventanaAgrupadoMin`, 2 min por
+   defecto; con 0 lo manda el mismo trigger). Si se suben 10 informes a una
+   carpeta asignada, sale un solo correo con la lista.
 
 **Sin duplicados:** las dos vías encolan con el mismo id,
-`avisosPendientes/{uid}-{reportId}-{grantedAt}` (la fecha de la asignación que
-graba el panel), con `create()`, que falla si ya existe. Y el despacho reclama
-los pendientes en una transacción: si el panel y la función programada miran
-el mismo grupo a la vez, solo uno lo manda.
+`avisosPendientes/{uid}-{reportId}-{grantedAt}`, con `create()`, que falla si
+ya existe. `grantedAt` es la fecha de la asignación que da el informe: la del
+informe si es directo, la de la carpeta si viene por una carpeta (está en
+`accesoEfectivo.opciones`). Y el despacho reclama los pendientes en una
+transacción: si el panel y la función programada miran el mismo grupo a la
+vez, solo uno lo manda.
 
-Se respeta `options[id].notificar == false` (casilla "Avisar al usuario por
-correo" destildada). Los admins también pueden tener informes asignados ("Mis
-informes") y reciben el aviso si se dejó tildada la casilla (para ellos viene
-destildada).
+Se respeta `opciones[id].notificar == false` (casilla "Avisar al usuario por
+correo" destildada, en el informe o en la carpeta). Los admins también pueden
+tener informes asignados ("Mis informes") y reciben el aviso si se dejó
+tildada la casilla (para ellos viene destildada).
 
-Al despachar se vuelve a leer `userAccess/{uid}`: si el admin destildó el
-informe antes del envío, ese informe no se avisa (y si no queda ninguno, no
-sale correo). También se toman ahí la caducidad y la carpeta, que suelen
-escribirse un instante después de habilitar el informe.
+Al despachar se vuelve a leer `accesoEfectivo/{uid}`: si el admin quitó el
+acceso antes del envío, ese informe no se avisa (y si no queda ninguno, no
+sale correo). También se toman ahí la caducidad y la carpeta (la ruta desde la
+raíz del usuario, sin las carpetas de arriba que no ve).
 """
 
 import datetime
@@ -37,7 +43,7 @@ from google.api_core import exceptions as gexc
 from google.cloud import firestore
 from google.cloud.firestore_v1.base_query import FieldFilter
 
-from . import config, correo, envio, plantillas
+from . import config, correo, envio, permisos, plantillas
 
 COLECCION = "avisosPendientes"
 
@@ -126,13 +132,13 @@ def _encolar(db, uid, rid, opciones, origen, ahora, event_id=None):
 # ── 1. Trigger (respaldo) ────────────────────────────────────────────
 
 def registrar_cambio(db, mailer, event_id, uid, antes, despues, ahora=None):
-    """Encola los avisos de un cambio en `userAccess/{uid}`. Devuelve la lista
-    de `reportId` encolados (vacía si no hay nada que avisar o si el panel ya
-    los había encolado)."""
+    """Encola los avisos de un cambio en `accesoEfectivo/{uid}`. Devuelve la
+    lista de `reportId` encolados (vacía si no hay nada que avisar o si el panel
+    ya los había encolado)."""
     nuevos = ids_nuevos(antes, despues)
     if not nuevos:
         return []
-    opciones = (despues or {}).get("options") or {}
+    opciones = (despues or {}).get("opciones") or {}
     nuevos = [rid for rid in nuevos if _quiere_aviso(opciones, rid)]
     if not nuevos:
         return []
@@ -196,19 +202,15 @@ def _reclamar(db, refs):
     return _paso(transaccion)
 
 
-def _ruta_carpeta(db, folder_id, cache):
-    """Ruta visible para el cliente ("A / B / C"): las carpetas ocultas no
-    aparecen, igual que en su vista del portal."""
+def _ruta_carpeta(carpetas, folder_id):
+    """Ruta visible para el usuario ("Estudio 1 / Ola 2"), desde SU raíz: se
+    arma con `accesoEfectivo.carpetas`, así que nunca muestra las carpetas de
+    arriba que no ve. Las carpetas ocultas no aparecen, igual que en el portal."""
     partes, vistos = [], set()
     actual = folder_id
-    while actual and actual not in vistos:
+    while actual and actual in carpetas and actual not in vistos:
         vistos.add(actual)
-        if actual not in cache:
-            snap = db.collection("folders").document(actual).get()
-            cache[actual] = (snap.to_dict() or {}) if snap.exists else None
-        carpeta = cache[actual]
-        if not carpeta:
-            break
+        carpeta = carpetas[actual] or {}
         if carpeta.get("clientVisible") is not False:
             partes.insert(0, str(carpeta.get("name") or "").strip())
         actual = carpeta.get("parentId")
@@ -223,8 +225,7 @@ def _fecha(iso):
         return ""
 
 
-def _valores(db, uid, email, ids, opciones, items):
-    cache = {}
+def _valores(db, uid, email, ids, opciones, items, carpetas):
     informes = []
     for rid in ids:
         snap = db.collection("reports").document(rid).get()
@@ -234,7 +235,7 @@ def _valores(db, uid, email, ids, opciones, items):
         informes.append({
             "id": rid,
             "nombre": str(rep.get("name") or "(sin nombre)"),
-            "carpeta": _ruta_carpeta(db, rep.get("folderId"), cache),
+            "carpeta": _ruta_carpeta(carpetas, rep.get("folderId")),
             "vence": _fecha((opciones.get(rid) or {}).get("expiresAt") or ""),
         })
     admins = []
@@ -265,10 +266,9 @@ def _cerrar(items, estado, **campos):
 
 
 def _despachar_grupo(db, mailer, uid, items, config_correos):
-    acceso_snap = db.collection("userAccess").document(uid).get()
-    acceso = (acceso_snap.to_dict() or {}) if acceso_snap.exists else {}
+    acceso = permisos.leer_acceso(db, uid)
     vigentes = set(acceso.get("reportIds") or [])
-    opciones = acceso.get("options") or {}
+    opciones = acceso.get("opciones") or {}
     ficha_snap = db.collection("users").document(uid).get()
     ficha = (ficha_snap.to_dict() or {}) if ficha_snap.exists else None
 
@@ -298,7 +298,7 @@ def _despachar_grupo(db, mailer, uid, items, config_correos):
         return {"uid": uid, "estado": correo.OMITIDO, "email": email,
                 "detalle": "El acceso se quitó o se marcó «no avisar» antes del envío."}
 
-    informes, valores = _valores(db, uid, email, ids, opciones, items)
+    informes, valores = _valores(db, uid, email, ids, opciones, items, acceso.get("carpetas") or {})
     if not informes:
         _cerrar(items, correo.OMITIDO, motivo="Los informes ya no existen.")
         return {"uid": uid, "estado": correo.OMITIDO, "detalle": "Los informes ya no existen."}
@@ -357,20 +357,29 @@ def despachar(db, mailer, ahora=None, uid=None, forzar=False, config_correos=Non
 
 # ── 3. En el momento (panel → callable avisarAsignacion) ─────────────
 
-def avisar_ahora(db, mailer, uid, report_ids, ahora=None):
+def avisar_ahora(db, mailer, uid, report_ids=None, ahora=None, folder_id=None, folder_ids=None):
     """Encola los informes recién habilitados a `uid` y manda el aviso ya.
 
-    Solo considera los que siguen asignados y no tienen «no avisar». Devuelve
+    Primero recalcula el acceso efectivo (así no depende de que el trigger de
+    `userAccess` haya terminado). Con `folder_id` (o varias en `folder_ids`)
+    avisa todos los informes que esas carpetas le dan al usuario (los que no
+    tiene por asignación directa), en el mismo correo que `report_ids`.
+    Solo considera los vigentes y sin «no avisar». Devuelve
     `{estado, detalle, informes, email}`; `estado` es `enviado`, `fallido`,
     `omitido`, `sin_aviso` (nada que avisar) o `ya_enviado` (otra vía lo mandó
     o lo está mandando: no se repite).
     """
     ahora = ahora or _ahora()
-    acceso_snap = db.collection("userAccess").document(uid).get()
-    acceso = (acceso_snap.to_dict() or {}) if acceso_snap.exists else {}
-    vigentes = set(acceso.get("reportIds") or [])
-    opciones = acceso.get("options") or {}
-    pedidos = [rid for rid in dict.fromkeys(report_ids or [])
+    _, acceso = permisos.recalcular(db, uid)
+    acceso = acceso or {}
+    vigentes = acceso.get("reportIds") or []
+    opciones = acceso.get("opciones") or {}
+    carpetas = set(folder_ids or []) | ({folder_id} if folder_id else set())
+    via = acceso.get("via") or {}
+    candidatos = list(dict.fromkeys(list(report_ids or [])
+                                    + [rid for rid in vigentes if via.get(rid) in carpetas]))
+    vigentes = set(vigentes)
+    pedidos = [rid for rid in candidatos
                if rid in vigentes and _quiere_aviso(opciones, rid)]
     if not pedidos:
         return {"estado": "sin_aviso", "informes": [],

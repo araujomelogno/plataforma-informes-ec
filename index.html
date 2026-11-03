@@ -20,7 +20,8 @@
              sendPasswordResetEmail, sendEmailVerification, signOut, multiFactor, TotpMultiFactorGenerator, getMultiFactorResolver }
       from 'https://www.gstatic.com/firebasejs/10.7.0/firebase-auth.js';
     import { getFirestore, connectFirestoreEmulator, collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, addDoc,
-             query, where, orderBy, limit, writeBatch, serverTimestamp, increment, deleteField }
+             query, where, orderBy, limit, writeBatch, serverTimestamp, increment, deleteField, onSnapshot,
+             arrayUnion, arrayRemove }
       from 'https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore.js';
     import { getStorage, connectStorageEmulator, ref as storageRef, uploadBytesResumable, getDownloadURL, deleteObject }
       from 'https://www.gstatic.com/firebasejs/10.7.0/firebase-storage.js';
@@ -62,6 +63,8 @@
           set: (data, opts) => (opts && opts.merge) ? setDoc(dref, data, { merge: true }) : setDoc(dref, data),
           update: (data) => updateDoc(dref, data),
           delete: () => deleteDoc(dref),
+          // Escucha el doc: devuelve la función para dejar de escuchar.
+          onSnapshot: (next, error) => onSnapshot(dref, (s) => next(wrapDocSnap(s)), error),
           collection: (sub) => wrapCollection(`${dref.path}/${sub}`),
         };
       }
@@ -128,6 +131,8 @@
         serverTimestamp: () => serverTimestamp(),
         increment: (n) => increment(n),
         delete: () => deleteField(),
+        arrayUnion: (...v) => arrayUnion(...v),
+        arrayRemove: (...v) => arrayRemove(...v),
       };
 
       window.firebase = { initializeApp: () => app, auth: () => auth, firestore: firestoreNs, storage: () => storage };
@@ -483,6 +488,20 @@
       border-top: 1px dashed var(--border);
     }
     .perm-opts.disabled { display: none; }
+    /* Permisos por carpeta */
+    .perm-section { margin-top: 1.1rem; }
+    .perm-section h4 { font-size: .85rem; font-weight: 800; color: var(--dark); margin: 0 0 .35rem; }
+    .perm-hint { font-size: .74rem; color: var(--gray); font-weight: 500; margin: 0 0 .5rem; }
+    .perm-folders { border: 1px solid var(--border); border-radius: 3px; padding: .25rem .6rem; max-height: 420px; overflow-y: auto; }
+    .pf-row { padding: .4rem .2rem; border-bottom: 1px solid #f3f3f3; }
+    .pf-row:last-child { border-bottom: none; }
+    .pf-row.granted { background: var(--orange-light); border-radius: 3px; }
+    .pf-row .perm-opts { margin-top: .4rem; }
+    .via-tag { font-size: .7rem; font-weight: 600; color: var(--gray); background: var(--gray-xlight); border: 1px solid var(--border); border-radius: 10px; padding: .05rem .5rem; white-space: nowrap; }
+    .via-tag a { color: var(--orange); margin-left: .3rem; }
+    .pf-row.inherited input[type=checkbox], .perm-item.via input[type=checkbox], .user-pick-row.via input[type=checkbox] { accent-color: #A8A8A8; }
+    .perm-item.via { border-style: dashed; }
+    .folder-tree-row.flash { background: var(--orange-light); transition: background .4s; }
     .perm-opt {
       display: flex; align-items: center; gap: 0.45rem;
       font-size: 0.72rem; font-weight: 600; color: var(--gray);
@@ -589,6 +608,7 @@
     table.matrix td.mx-cell { text-align: center; width: 2rem; min-width: 2rem; }
     table.matrix .mx-yes { color: #1E9E57; font-weight: 800; }
     table.matrix .mx-no { color: #D9D9D9; }
+    table.matrix .mx-via { font-size: .8rem; }
     table.matrix td.mx-total, table.matrix th.mx-total-col { text-align: center; font-weight: 700; color: var(--gray); background: var(--gray-xlight); }
     table.matrix tfoot td { position: sticky; bottom: 0; z-index: 2; background: var(--gray-xlight); font-weight: 700; text-align: center; }
     table.matrix tfoot td.mx-name { left: 0; z-index: 3; text-align: left; color: var(--dark); }
@@ -1223,6 +1243,18 @@
           </div>
           <div id="maillog-table"><div class="loading">Cargando…</div></div>
         </div>
+        <div class="card">
+          <div class="card-header"><span class="card-header-title">Accesos por carpeta</span></div>
+          <div class="card-body">
+            <p style="font-size:.8rem;color:var(--gray);font-weight:500;margin:0 0 .8rem">
+              El acceso de cada usuario (sus informes directos más los de sus carpetas) se recalcula solo al asignar,
+              subir, mover o borrar, y todas las noches. Este botón lo recalcula ya para todos y verifica que no falte
+              ningún informe asignado: sirve para la migración y como reparación.
+            </p>
+            <button class="btn btn-outline btn-sm" id="recalc-btn" onclick="recalcularAccesosUI()">🔄 Recalcular accesos</button>
+            <div id="recalc-result" class="hidden" style="margin-top:.8rem"></div>
+          </div>
+        </div>
       </div>
 
       <div id="tab-matrix" class="hidden">
@@ -1397,6 +1429,7 @@ function boot() {
     } else {
       stopHeartbeat(); currentSessionId = null;
       _sessionKeys.clear();   // claves de sesión de informes encriptados abiertos en esta pestaña
+      stopAccessListener();
       currentUser = null; currentUserData = null;
       renderLogin();
     }
@@ -1691,7 +1724,7 @@ async function doLogin() {
     showAlert('login-alert', 'error', '❌ Email o contraseña incorrectos');
   }
 }
-async function doLogout() { _sessionKeys.clear(); await endSession(); auth.signOut(); }
+async function doLogout() { _sessionKeys.clear(); stopAccessListener(); await endSession(); auth.signOut(); }
 
 // Autoservicio desde el login: el usuario pide un enlace para restablecer su
 // contraseña. Lo manda la Cloud Function solicitarRestablecimiento desde
@@ -1792,28 +1825,41 @@ async function loadReports() {
 }
 
 // Cuenta, por informe, cuántos usuarios tienen acceso (leyendo userAccess una vez).
+// Cuenta desde el acceso efectivo (accesoEfectivo): incluye a quienes ven el
+// informe por una carpeta asignada.
 async function loadReportAccessCounts() {
   const counts = {};
   try {
-    const snap = await db.collection('userAccess').get();
+    const snap = await db.collection('accesoEfectivo').get();
     snap.docs.forEach(d => {
       (d.data().reportIds || []).forEach(rid => { counts[rid] = (counts[rid] || 0) + 1; });
     });
   } catch { /* sin permisos / sin datos → contadores vacíos */ }
   reportAccessCounts = counts;
 }
+// Después de asignar una carpeta, la Cloud Function recalcula en 1–3 s: se
+// vuelven a leer los contadores un rato después.
+let _countsTimer = null;
+function refreshAccessCountsSoon() {
+  clearTimeout(_countsTimer);
+  _countsTimer = setTimeout(async () => { await loadReportAccessCounts(); if (el('reports-table')) renderReportsTable(); }, 3500);
+}
 
 /* ── MATRIZ usuarios/informes ── */
-let _matrixAccess = null;   // { uid: Set(reportIds) }
+let _matrixAccess = null;   // { uid: Map(reportId → null (directo) | id de la carpeta que se lo da) }
 async function loadMatrix() {
   const cont = el('matrix-content'); if (!cont) return;
   cont.innerHTML = '<div class="loading">Cargando matriz...</div>';
   try {
     if (!allUsers.length)   await loadUsers();
     if (!allReports.length) await loadReports();
-    const snap = await db.collection('userAccess').get();
+    if (!allFolders.length) await loadFolders();
+    const snap = await db.collection('accesoEfectivo').get();
     const access = {};
-    snap.docs.forEach(d => { access[d.id] = new Set(d.data().reportIds || []); });
+    snap.docs.forEach(d => {
+      const dt = d.data(), via = dt.via || {};
+      access[d.id] = new Map((dt.reportIds || []).map(rid => [rid, via[rid] || null]));
+    });
     _matrixAccess = access;
     renderMatrix();
   } catch (e) {
@@ -1858,6 +1904,7 @@ function renderMatrix() {
   if (!users.length || !reports.length) { cont.innerHTML = emptyHTML('🔎', 'Nada coincide con los filtros.'); return; }
 
   const has = (uid, rid) => !!(access[uid] && access[uid].has(rid));
+  const viaOf = (uid, rid) => (access[uid] && access[uid].get(rid)) || null;
 
   // Columnas: solo los usuarios con al menos un ✓ en los informes visibles (B1).
   // Los ocultos tienen 0 en todas esas filas, así que el "Total" no cambia.
@@ -1889,9 +1936,10 @@ function renderMatrix() {
     const cnt = users.reduce((n, u) => n + (has(u.uid, r.id) ? 1 : 0), 0);
     return `<tr>
       <td class="mx-name">${fileIcon(r.name)} ${esc(r.name)}</td>
-      ${users.map(u => has(u.uid, r.id)
-        ? `<td class="mx-cell mx-yes" title="${esc(u.email)} tiene acceso a ${esc(r.name)}">✓</td>`
-        : `<td class="mx-cell mx-no">·</td>`).join('')}
+      ${users.map(u => !has(u.uid, r.id) ? `<td class="mx-cell mx-no">·</td>`
+        : viaOf(u.uid, r.id)
+          ? `<td class="mx-cell mx-via" title="${esc(u.email)} ve ${esc(r.name)} por la carpeta ${esc(folderName(viaOf(u.uid, r.id)))}">📁</td>`
+          : `<td class="mx-cell mx-yes" title="${esc(u.email)} tiene acceso a ${esc(r.name)}">✓</td>`).join('')}
       <td class="mx-total">${cnt}</td>
     </tr>`;
   }).join('');
@@ -2261,18 +2309,26 @@ function folderById(id) { return allFolders.find(f => f.id === id) || null; }
 // contenido "promovido" a la carpeta visible más cercana hacia arriba (o a la raíz).
 function isClientVisibleFolder(f) { return !f || f.clientVisible !== false; }
 
+// Vista del cliente (y "Mis informes" del admin): navega sobre las carpetas de
+// SU acceso efectivo (accesoEfectivo/{uid}.carpetas), no sobre el árbol
+// completo. Ahí las raíces del usuario ya vienen con parentId null, así que la
+// navegación nunca sube por encima de ellas ni muestra sus antecesoras.
+let _navFolders = new Map();   // fid → { id, name, parentId, clientVisible }
+function navFolder(id) { return (id && _navFolders.get(id)) || null; }
+
 // Dada una carpeta (por id) devuelve la carpeta visible más cercana en la cadena
-// [ella misma, su padre, su abuelo, …]. Si ninguna es visible, devuelve null (raíz).
-// Se usa en la vista del cliente para "saltear" las carpetas ocultas.
+// [ella misma, su padre, su abuelo, …] dentro de las carpetas del usuario. Si
+// ninguna es visible (o llega a una raíz suya), devuelve null: el inicio. Así
+// se "saltean" las carpetas ocultas sin pasar por encima de una raíz.
 function nearestVisibleFolderFrom(folderId) {
-  let cur = folderId ? folderById(folderId) : null;
+  let cur = navFolder(folderId);
   const seen = new Set();
   while (cur && !seen.has(cur.id)) {
     seen.add(cur.id);
     if (isClientVisibleFolder(cur)) return cur.id;
-    cur = cur.parentId ? folderById(cur.parentId) : null;
+    cur = navFolder(cur.parentId);
   }
-  return null; // raíz
+  return null; // inicio
 }
 
 function childFolders(parentId) {
@@ -2378,7 +2434,7 @@ function renderFoldersTree() {
     const hiddenTag = visible ? '' :
       `<span style="color:var(--gray);font-size:.72rem;font-weight:600;white-space:nowrap;background:var(--gray-xlight);border-radius:6px;padding:.1rem .4rem">oculta a clientes</span>`;
     return `
-      <div class="folder-tree-row">
+      <div class="folder-tree-row" id="ftree-${folder.id}">
         <div class="ftree-name">
           <span style="width:${depth * 22}px;flex:0 0 auto"></span>
           <span class="fname" style="${visible ? '' : 'opacity:.65'}">${visible ? '📁' : '🗂️'} ${esc(folder.name)}</span>
@@ -2389,6 +2445,7 @@ function renderFoldersTree() {
         <select class="fselect" style="width:230px;flex:0 0 auto;font-size:.8rem;padding:.4rem .5rem" onchange="moveFolder('${folder.id}', this.value)">${folderMoveOptionsHTML(folder.id, folder.parentId || '')}</select>
         <span style="flex:1"></span>
         ${visBtn}
+        <button class="btn btn-outline btn-sm" title="Usuarios que ven esta carpeta (y sus subcarpetas)" onclick="openFolderUsersModal('${folder.id}')">👥 Usuarios</button>
         <button class="btn btn-outline btn-sm" onclick="renameFolder('${folder.id}')">✏️ Renombrar</button>
         <button class="btn btn-danger btn-sm" onclick="deleteFolder('${folder.id}')">🗑</button>
       </div>`;
@@ -2472,9 +2529,20 @@ async function deleteFolder(id) {
   const reps = allReports.filter(r => (r.folderId || null) === id);
   const parentId = f.parentId || null;
   const parentName = parentId ? (folderById(parentId) ? folderById(parentId).name : 'la carpeta padre') : 'la raíz';
+  // C9: quienes tienen asignada esta carpeta (o una subcarpeta) pierden el acceso
+  // a su contenido; la Cloud Function los limpia de userAccess. Nadie gana la padre.
+  let afectados = 0;
+  try {
+    const sub = new Set(foldersInTreeOrder(id).map(x => x.folder.id).concat(id));
+    const ua = await db.collection('userAccess').get();
+    afectados = ua.docs.filter(d => (d.data().folderIds || []).some(fid => sub.has(fid))).length;
+  } catch (e) { /* sin el conteo, igual se puede borrar */ }
   let msg = `¿Borrar la carpeta "${f.name}"?`;
   if (subs.length || reps.length) {
     msg += `\n\nSu contenido (${subs.length} subcarpeta(s) y ${reps.length} informe(s)) se moverá a ${parentName}.`;
+  }
+  if (afectados) {
+    msg += `\n\n⚠️ ${afectados === 1 ? '1 usuario tiene' : `${afectados} usuarios tienen`} permiso sobre esta carpeta y ${afectados === 1 ? 'va' : 'van'} a perder acceso a su contenido.`;
   }
   msg += `\n\nNo se borra ningún informe.`;
   if (!confirm(msg)) return;
@@ -2490,6 +2558,106 @@ async function deleteFolder(id) {
     renderReportsTable();
   } catch (e) {
     alert('No se pudo borrar la carpeta: ' + (e.message || e));
+  }
+}
+
+// Lleva a una carpeta en el árbol de Informes (desde "vía carpeta" de un modal).
+function revealFolder(folderId) {
+  closeUsersModal();
+  switchTab('reports', el('nav-reports'));
+  setReportsFolderFilter(folderId);
+  const row = el('ftree-' + folderId);
+  if (row) { row.scrollIntoView({ behavior: 'smooth', block: 'center' }); row.classList.add('flash'); setTimeout(() => row.classList.remove('flash'), 2000); }
+}
+
+/* ── Diálogo: usuarios con permiso sobre una carpeta (C3) ──
+   Como el de cada informe, pero asigna la carpeta (grantFolderToUser, igual que
+   la pestaña Permisos). Los que ya la ven porque tienen asignada una carpeta
+   antecesora aparecen tildados en gris ("por …"). */
+let _folderUsersModal = null;   // { folderId, name, users:[{uid,email,admin,has,by,opts}] }
+
+async function openFolderUsersModal(folderId) {
+  const f = folderById(folderId); if (!f) return;
+  openUsersModal('<div class="loading">Cargando usuarios…</div>');
+  const t = document.querySelector('#users-modal .modal-title'); if (t) t.textContent = `👥 Usuarios de 📁 ${f.name}`;
+  try {
+    const snap = await db.collection('userAccess').get();
+    const byUid = {};
+    snap.docs.forEach(d => { byUid[d.id] = d.data(); });
+    const users = allUsers.map(u => {
+      const dt = byUid[u.id] || {};
+      const asignadas = new Set(dt.folderIds || []);
+      return { uid: u.id, email: u.email || '', admin: u.role === 'admin', has: asignadas.has(folderId),
+               by: asignadas.has(folderId) ? null : assignedAncestor(folderId, asignadas),
+               opts: (dt.folderOptions || {})[folderId] || {} };
+    }).sort((a, b) => a.email.localeCompare(b.email, 'es'));
+    _folderUsersModal = { folderId, name: f.name, users };
+    setUsersModalBody(`
+      <p style="font-size:.85rem;color:var(--gray);font-weight:500;margin:0 0 .7rem">
+        Elegí qué usuarios ven <b>📁 ${esc(f.name)}</b>: todos sus informes y los de sus subcarpetas, también los que se suban después.
+        Los cambios se guardan automáticamente.
+      </p>
+      ${notifyCheckboxHTML('folder-users-notify', true, 'Avisar por correo, también cuando se suban informes nuevos a esta carpeta')}
+      ${users.some(u => u.admin) ? notifyCheckboxHTML('folder-users-notify-admins', false, 'Avisar también a los admins (salen del mismo cupo diario de correos)') : ''}
+      <input type="text" id="folder-users-filter" placeholder="Buscar usuario por email…"
+        oninput="renderFolderUsersList()" style="width:100%;margin-bottom:.6rem" />
+      <div id="folder-users-count" style="font-size:.78rem;color:var(--gray);font-weight:600;margin-bottom:.5rem"></div>
+      <div id="folder-users-listbox" class="user-pick-list"></div>`);
+    renderFolderUsersList();
+  } catch (e) {
+    setUsersModalBody(`<div class="alert alert-error">❌ No se pudieron cargar los usuarios: ${esc(e.message || String(e))}</div>`);
+  }
+}
+
+function renderFolderUsersList() {
+  const st = _folderUsersModal; if (!st || !el('folder-users-listbox')) return;
+  const f = (el('folder-users-filter') && el('folder-users-filter').value || '').trim().toLowerCase();
+  const list = st.users
+    .filter(u => !f || u.email.toLowerCase().includes(f))
+    .sort((a, b) => ((b.has || !!b.by) - (a.has || !!a.by)) || a.email.localeCompare(b.email, 'es', { sensitivity: 'base' }));
+  el('folder-users-listbox').innerHTML = list.length ? list.map(u => `
+    <div class="user-pick-row ${u.by ? 'via' : ''}" id="furow-${u.uid}">
+      <label class="user-pick" ${u.by ? `title="La ve porque tiene asignada ${esc(folderName(u.by))}"` : ''}>
+        <input type="checkbox" ${u.has || u.by ? 'checked' : ''} ${u.by ? 'disabled' : ''} onchange="toggleFolderUser('${u.uid}', this.checked, this)" />
+        <span class="user-pick-avatar">${esc((u.email[0] || '?').toUpperCase())}</span>
+        <span class="user-pick-email">${esc(u.email)}</span>
+        ${u.admin ? '<span class="badge badge-admin">admin</span>' : ''}
+        ${u.by ? `<span class="via-tag">por <b>${esc(folderName(u.by))}</b></span>` : ''}
+      </label>
+      <div class="user-pick-opts ${u.has ? '' : 'hidden'}" id="fuopts-${u.uid}">${u.has ? folderUserOptsHTML(u) : ''}</div>
+    </div>`).join('') : `<div class="folder-tree-empty" style="padding:.7rem">No hay usuarios que coincidan.</div>`;
+  const cnt = el('folder-users-count');
+  if (cnt) {
+    const directos = st.users.filter(u => u.has).length, heredados = st.users.filter(u => u.by).length;
+    cnt.textContent = `${directos} con la carpeta asignada${heredados ? ` · ${heredados} por una carpeta de arriba` : ''} · ${st.users.length} ${st.users.length === 1 ? 'usuario' : 'usuarios'}`;
+  }
+}
+function folderUserOptsHTML(u) {
+  const st = _folderUsersModal;
+  return `<div style="display:grid;gap:.3rem;padding:.15rem 0 .55rem 2.5rem;border-bottom:1px dashed var(--border);margin-bottom:.15rem">
+    ${folderOptsHTML(u.uid, st.folderId, u.opts, 'fmodal')}</div>`;
+}
+// Refresca las opciones de un usuario en el modal después de un cambio.
+function refreshFolderUsersModal(uid, cambios) {
+  const st = _folderUsersModal; const u = st && st.users.find(x => x.uid === uid);
+  if (!u) return;
+  Object.entries(cambios || {}).forEach(([k, val]) => { if (val === '' || val == null) delete u.opts[k]; else u.opts[k] = val; });
+  const box = el('fuopts-' + uid); if (box && u.has) box.innerHTML = folderUserOptsHTML(u);
+}
+
+async function toggleFolderUser(uid, grant, cb) {
+  const st = _folderUsersModal; if (!st) return;
+  if (cb) cb.disabled = true;
+  try {
+    const u = st.users.find(x => x.uid === uid);
+    const notify = (u && u.admin) ? notifyChecked('folder-users-notify-admins', false) : notifyChecked('folder-users-notify');
+    const opts = await grantFolderToUser(uid, st.folderId, grant, notify);
+    if (u) { u.has = grant; u.opts = opts || {}; }
+    renderFolderUsersList();
+    refreshAccessCountsSoon();
+  } catch (e) {
+    alert('No se pudo actualizar el permiso: ' + (e.message || e));
+    if (cb) { cb.checked = !grant; cb.disabled = false; }
   }
 }
 
@@ -2994,11 +3162,15 @@ async function openReportUsersModal(reportId, name) {
   try {
     // Acceso actual: leemos todos los userAccess una vez y armamos el mapa.
     const snap = await db.collection('userAccess').get();
-    const accessByUid = {}, optionsByUid = {};
-    snap.docs.forEach(d => { const dt = d.data(); accessByUid[d.id] = (dt.reportIds || []); optionsByUid[d.id] = (dt.options || {}); });
+    const accessByUid = {}, optionsByUid = {}, foldersByUid = {};
+    snap.docs.forEach(d => { const dt = d.data(); accessByUid[d.id] = (dt.reportIds || []); optionsByUid[d.id] = (dt.options || {}); foldersByUid[d.id] = new Set(dt.folderIds || []); });
+    // Quién lo ve por una carpeta: la asignada más cercana al informe (la misma
+    // precedencia que la Cloud Function).
+    const rep = allReports.find(x => x.id === reportId) || {};
     // Los admins también se pueden asignar: les sirve de atajo ("Mis informes").
     const users = allUsers
-      .map(u => ({ uid: u.id, email: u.email || '', admin: u.role === 'admin', has: (accessByUid[u.id] || []).includes(reportId), opts: (optionsByUid[u.id] || {})[reportId] || {} }))
+      .map(u => ({ uid: u.id, email: u.email || '', admin: u.role === 'admin', has: (accessByUid[u.id] || []).includes(reportId), opts: (optionsByUid[u.id] || {})[reportId] || {},
+                   via: nearestAssignedFolder(rep.folderId, foldersByUid[u.id] || new Set()) }))
       .sort((a, b) => a.email.localeCompare(b.email, 'es'));
     _reportUsersModal = { reportId, name, users };
     setUsersModalBody(reportUsersShellHTML());
@@ -3033,36 +3205,49 @@ function renderReportUsersList() {
   // calcula al abrir/filtrar y se mantiene estable mientras se tildan casillas.
   const list = st.users
     .filter(u => !f || u.email.toLowerCase().includes(f))
-    .sort((a, b) => (b.has - a.has) || a.email.localeCompare(b.email, 'es', { sensitivity: 'base' }));
+    .sort((a, b) => ((b.has || !!b.via) - (a.has || !!a.via)) || a.email.localeCompare(b.email, 'es', { sensitivity: 'base' }));
   const box = el('report-users-listbox');
   if (box) {
+    // Los que lo ven por una carpeta aparecen tildados en gris ("vía …"):
+    // tildarlos les da además la asignación directa.
     box.innerHTML = list.length ? list.map(u => `
-      <div class="user-pick-row" id="urow-${u.uid}">
+      <div class="user-pick-row ${!u.has && u.via ? 'via' : ''}" id="urow-${u.uid}">
         <label class="user-pick">
-          <input type="checkbox" ${u.has ? 'checked' : ''} onchange="toggleReportUser('${u.uid}', this.checked, this)" />
+          <input type="checkbox" ${u.has || u.via ? 'checked' : ''} onchange="toggleReportUser('${u.uid}', this.checked, this)" />
           <span class="user-pick-avatar">${esc((u.email[0] || '?').toUpperCase())}</span>
           <span class="user-pick-email">${esc(u.email)}</span>
           ${u.admin ? '<span class="badge badge-admin">admin</span>' : ''}
+          ${u.via ? `<span class="via-tag">${u.has ? 'también ' : ''}vía <b>${esc(folderName(u.via))}</b>
+            <a href="#" onclick="event.preventDefault();event.stopPropagation();revealFolder('${u.via}')">abrir carpeta</a></span>` : ''}
         </label>
         <div class="user-pick-opts ${u.has ? '' : 'hidden'}" id="uopts-${u.uid}">${u.has ? reportUserOptsHTML(u.uid, st.reportId, u.opts) : ''}</div>
       </div>`).join('') : `<div class="folder-tree-empty" style="padding:.7rem">No hay usuarios que coincidan.</div>`;
   }
-  const cnt = el('report-users-count');
-  if (cnt) {
-    const granted = st.users.filter(u => u.has).length;
-    cnt.textContent = `${granted} con acceso · ${st.users.length} ${st.users.length === 1 ? 'usuario' : 'usuarios'}`;
-  }
+  setReportUsersCount();
+}
+function setReportUsersCount() {
+  const st = _reportUsersModal; const cnt = el('report-users-count');
+  if (!st || !cnt) return;
+  const granted = st.users.filter(u => u.has || u.via).length;
+  const porCarpeta = st.users.filter(u => !u.has && u.via).length;
+  cnt.textContent = `${granted} con acceso${porCarpeta ? ` (${porCarpeta} por carpeta)` : ''} · ${st.users.length} ${st.users.length === 1 ? 'usuario' : 'usuarios'}`;
 }
 
 async function toggleReportUser(uid, grant, cb) {
   const st = _reportUsersModal; if (!st) return;
+  // Lo ve por una carpeta: el clic le da la asignación directa (no se lo quita).
+  const pre = st.users.find(x => x.uid === uid);
+  if (pre && !pre.has && pre.via) { grant = true; if (cb) cb.checked = true; }
   if (cb) cb.disabled = true;
   try {
     const target = st.users.find(x => x.uid === uid);
     const notify = (target && target.admin) ? notifyChecked('report-users-notify-admins', false) : notifyChecked('report-users-notify');
     const options = await grantReportToUser(uid, st.reportId, grant, notify);
     const u = st.users.find(x => x.uid === uid);
+    const hadAccess = u && (u.has || !!u.via);
     if (u) { u.has = grant; if (grant) u.opts = options[st.reportId] || {}; }
+    if (u && !grant && u.via && cb) cb.checked = true;   // la carpeta se lo sigue dando
+    const row = el('urow-' + uid); if (row && u) row.classList.toggle('via', !u.has && !!u.via);
     // Mostrar/ocultar las opciones de permisos de ese usuario en el momento
     // (sin reordenar la lista, para no perder el punto donde estás).
     const box = el('uopts-' + uid);
@@ -3070,13 +3255,10 @@ async function toggleReportUser(uid, grant, cb) {
       if (grant) { box.innerHTML = reportUserOptsHTML(uid, st.reportId, (u && u.opts) || {}); box.classList.remove('hidden'); }
       else { box.innerHTML = ''; box.classList.add('hidden'); }
     }
-    const cnt = el('report-users-count');
-    if (cnt) {
-      const granted = st.users.filter(x => x.has).length;
-      cnt.textContent = `${granted} con acceso · ${st.users.length} ${st.users.length === 1 ? 'usuario' : 'usuarios'}`;
-    }
-    // Mantener el badge de la lista de informes en sincronía.
-    reportAccessCounts[st.reportId] = Math.max(0, (reportAccessCounts[st.reportId] || 0) + (grant ? 1 : -1));
+    setReportUsersCount();
+    // Mantener el badge de la lista de informes en sincronía (acceso efectivo).
+    const hasAccess = u && (u.has || !!u.via);
+    if (hadAccess !== hasAccess) reportAccessCounts[st.reportId] = Math.max(0, (reportAccessCounts[st.reportId] || 0) + (hasAccess ? 1 : -1));
     renderReportsTable();
   } catch (e) {
     alert('No se pudo actualizar el acceso: ' + (e.message || e));
@@ -3607,45 +3789,81 @@ function populatePermSelect() {
   if (prev && sel.value === prev) loadUserPermissions();
 }
 
-async function loadUserPermissions() {
+async function loadUserPermissions(quiet) {
   const userId = v('perm-user-select');
   const cont = el('perm-content');
   if (!userId) {
     cont.innerHTML = `<div class="empty"><div class="empty-icon">👆</div><p>Elegí un usuario para ver sus permisos</p></div>`;
     return;
   }
-  cont.innerHTML = '<div class="loading">Cargando permisos...</div>';
+  // `quiet`: re-render después de un cambio, sin el "Cargando" (no salta el scroll).
+  if (!quiet) cont.innerHTML = '<div class="loading">Cargando permisos...</div>';
   const snap = await db.collection('userAccess').doc(userId).get();
   const data = snap.exists ? snap.data() : {};
   const granted = data.reportIds || [];
   const optsMap = data.options || {};
-  if (!allReports.length) {
+  const folderIds = new Set((data.folderIds || []).filter(id => folderById(id)));
+  const folderOpts = data.folderOptions || {};
+  if (!allReports.length && !allFolders.length) {
     cont.innerHTML = emptyHTML('📭', 'No hay informes disponibles para asignar');
     return;
   }
   // Un admin ve y administra todos los informes: la asignación es solo un atajo
   // ("Mis informes"), así que no se le muestran protecciones ni caducidad.
   const isAdm = isAdminUid(userId);
+  // C1: carpetas. Una subcarpeta de una asignada se ve tildada en gris
+  // ("incluida por …"): no se puede destildar sola (no hay permisos negativos).
+  const folderRows = foldersInTreeOrder().map(({ folder, depth }) => {
+    const on = folderIds.has(folder.id);
+    const by = on ? null : assignedAncestor(folder.id, folderIds);
+    const visible = isClientVisibleFolder(folder);
+    return `
+      <div class="pf-row ${on ? 'granted' : ''} ${by ? 'inherited' : ''}" style="margin-left:${depth * 20}px" id="pf-${folder.id}">
+        <label class="perm-head" ${by ? `title="La ve porque tiene asignada ${esc(folderName(by))}"` : ''}>
+          <input type="checkbox" ${on || by ? 'checked' : ''} ${by ? 'disabled' : ''} onchange="togglePermFolder('${userId}','${folder.id}',this)" />
+          <span class="perm-label">${visible ? '📁' : '🗂️'} ${esc(folder.name)}</span>
+          ${by ? `<span class="via-tag">incluida por <b>${esc(folderName(by))}</b></span>` : ''}
+          ${visible ? '' : '<span class="via-tag">oculta a clientes</span>'}
+        </label>
+        ${on ? `<div class="perm-opts">${folderOptsHTML(userId, folder.id, folderOpts[folder.id], 'perm')}</div>` : ''}
+      </div>`;
+  }).join('');
   cont.innerHTML = `
     <p style="font-size:0.8rem;color:var(--gray);font-weight:500">
       ${isAdm
-        ? `<span class="badge badge-admin">admin</span> Marcá los informes que este administrador va a tener a mano en <b>«Mis informes»</b>.
+        ? `<span class="badge badge-admin">admin</span> Marcá las carpetas o los informes que este administrador va a tener a mano en <b>«Mis informes»</b>.
            Igual ve y administra todos; a los admins no se les aplican protecciones ni caducidad.<br>`
-        : `Marcá los informes a los que puede acceder este usuario y configurá las protecciones de cada uno.<br>`}
+        : `Marcá las carpetas o los informes a los que puede acceder este usuario y configurá las protecciones de cada uno.<br>`}
       Los cambios se guardan automáticamente.
     </p>
-    ${notifyCheckboxHTML('perm-notify', !isAdm)}
+    <div class="perm-section">
+      <h4>📁 Carpetas</h4>
+      <p class="perm-hint">Con una carpeta asignada ve todos sus informes y los de sus subcarpetas, también los que se suban después.
+        Las protecciones y la caducidad de la carpeta valen para sus informes, salvo los que tienen asignación propia.</p>
+      ${notifyCheckboxHTML('perm-folder-notify', !isAdm, 'Avisar por correo, también cuando se suban informes nuevos a esta carpeta')}
+      <div class="perm-folders">${folderRows || '<div class="folder-tree-empty">Todavía no hay carpetas.</div>'}</div>
+    </div>
+    <div class="perm-section">
+      <h4>📄 Informes</h4>
+      ${notifyCheckboxHTML('perm-notify', !isAdm)}
     <div class="perm-grid">
       ${allReports.map(r => {
         const on = granted.includes(r.id);
+        // C2: el acceso que le da una carpeta (la asignada más cercana al informe).
+        const via = nearestAssignedFolder(r.folderId, folderIds);
+        const viaOnly = !on && !!via;
         const o  = mergeOpts(optsMap[r.id]);
         const expVal = (optsMap[r.id] && optsMap[r.id].expiresAt) || '';
+        const viaTag = viaOnly
+          ? `<span class="via-tag" title="Lo ve por la carpeta. Tildalo para darle una asignación directa (con protecciones o caducidad propias).">📁 vía <b>${esc(folderName(via))}</b></span>`
+          : (on && via ? `<span class="via-tag" title="Si le quitás la asignación directa, lo sigue viendo por la carpeta.">también vía <b>${esc(folderName(via))}</b></span>` : '');
         return `
-      <div class="perm-item ${on?'granted':''}" id="perm-${r.id}">
+      <div class="perm-item ${on?'granted':''} ${viaOnly?'via':''}" id="perm-${r.id}">
         <label class="perm-head">
-          <input type="checkbox" ${on?'checked':''} onchange="togglePerm('${userId}','${r.id}',this)" />
-          <span class="perm-label">${fileIcon(r.name)} ${esc(r.name)}</span>
+          <input type="checkbox" ${on || viaOnly ?'checked':''} data-viaonly="${viaOnly ? 1 : 0}" data-via="${via || ''}" onchange="togglePerm('${userId}','${r.id}',this)" />
+          <span class="perm-label">${fileIcon(r.name)} ${esc(r.name)}${r.encrypted ? '<span class="enc-tag" title="Informe encriptado">🔒</span>' : ''}</span>
         </label>
+        ${viaTag}
         <div class="perm-opts ${on?'':'disabled'}">
           ${isAdm ? '' : `${OPT_DEFS.map(d => `
           <label class="perm-opt">
@@ -3666,7 +3884,20 @@ async function loadUserPermissions() {
         </div>
       </div>`;
       }).join('')}
+    </div>
     </div>`;
+}
+
+async function togglePermFolder(userId, folderId, cb) {
+  cb.disabled = true;
+  try {
+    await grantFolderToUser(userId, folderId, cb.checked, notifyChecked('perm-folder-notify', !isAdminUid(userId)));
+    await loadUserPermissions(true);
+    refreshAccessCountsSoon();
+  } catch (e) {
+    alert('No se pudo actualizar el permiso de la carpeta: ' + (e.message || e));
+    cb.checked = !cb.checked; cb.disabled = false;
+  }
 }
 
 // Casilla "Avisar al usuario por correo" (marcada por defecto) de la pestaña
@@ -3723,28 +3954,42 @@ async function grantReportToUser(userId, reportId, grant, notificar = true) {
 // userAccess queda de respaldo (si se cierra la pestaña antes, lo manda el
 // servidor a los pocos minutos) y nunca duplica: los dos usan el mismo id.
 const NOTICE_DEBOUNCE_MS = 4000;
-const _noticeQueue = {};   // { uid: { ids: Set, timer } }
-function queueAssignmentNotice(uid, reportId) {
-  const q = _noticeQueue[uid] || (_noticeQueue[uid] = { ids: new Set(), timer: null });
-  q.ids.add(reportId);
+// { uid: { ids: Set, folders: Set, timer } }: informes y carpetas recién
+// habilitados; salen en UNA llamada (un solo correo con todo).
+const _noticeQueue = {};
+function _noticeEntry(uid) {
+  return _noticeQueue[uid] || (_noticeQueue[uid] = { ids: new Set(), folders: new Set(), timer: null });
+}
+function _armNotice(uid) {
+  const q = _noticeQueue[uid];
   clearTimeout(q.timer);
   q.timer = setTimeout(() => flushAssignmentNotice(uid), NOTICE_DEBOUNCE_MS);
 }
+function _dropNoticeIfEmpty(uid) {
+  const q = _noticeQueue[uid];
+  if (q && !q.ids.size && !q.folders.size) { clearTimeout(q.timer); delete _noticeQueue[uid]; }
+}
+function queueAssignmentNotice(uid, reportId) { _noticeEntry(uid).ids.add(reportId); _armNotice(uid); }
 function dequeueAssignmentNotice(uid, reportId) {
   const q = _noticeQueue[uid]; if (!q) return;
-  q.ids.delete(reportId);
-  if (!q.ids.size) { clearTimeout(q.timer); delete _noticeQueue[uid]; }
+  q.ids.delete(reportId); _dropNoticeIfEmpty(uid);
+}
+// Carpeta: la función avisa todos los informes que esa carpeta le da al usuario.
+function queueFolderNotice(uid, folderId) { _noticeEntry(uid).folders.add(folderId); _armNotice(uid); }
+function dequeueFolderNotice(uid, folderId) {
+  const q = _noticeQueue[uid]; if (!q) return;
+  q.folders.delete(folderId); _dropNoticeIfEmpty(uid);
 }
 async function flushAssignmentNotice(uid) {
   const q = _noticeQueue[uid]; if (!q) return;
   delete _noticeQueue[uid];
   clearTimeout(q.timer);
-  const reportIds = [...q.ids];
-  if (!reportIds.length) return;
+  const reportIds = [...q.ids], folderIds = [...q.folders];
+  if (!reportIds.length && !folderIds.length) return;
   const u = allUsers.find(x => x.id === uid);
   const who = (u && u.email) || 'el usuario';
   try {
-    const r = await callFn('avisarAsignacion', { uid, reportIds });
+    const r = await callFn('avisarAsignacion', { uid, reportIds, folderIds });
     const n = (r.informes || reportIds).length;
     const what = n === 1 ? 'el informe' : `${n} informes`;
     if (r.estado === 'enviado') showToast(`📧 Se avisó por correo a ${who} (${what}).`, 'ok');
@@ -3771,27 +4016,108 @@ function showToast(text, kind = 'info', ms = 6000) {
 }
 
 async function togglePerm(userId, reportId, cb) {
-  const on = cb.checked;
-  const options = await grantReportToUser(userId, reportId, on, notifyChecked('perm-notify'));
-  // Mantener el badge de "usuarios con acceso" de la lista de informes.
-  reportAccessCounts[reportId] = Math.max(0, (reportAccessCounts[reportId] || 0) + (on ? 1 : -1));
-  // Reflejar en la UI: activar/desactivar los toggles de protección
-  const item = el('perm-' + reportId);
-  if (item) {
-    item.classList.toggle('granted', on);
-    const box = item.querySelector('.perm-opts');
-    box.classList.toggle('disabled', !on);
-    const o = mergeOpts(options[reportId]);
-    box.querySelectorAll('input[data-optkey]').forEach(i => {
-      i.disabled = !on;
-      if (on) i.checked = !!o[i.dataset.optkey];
-    });
-    box.querySelectorAll('input[data-expiry]').forEach(i => { i.disabled = !on; });
-    // Actualizar la línea "Asignado por …": mostrarla al conceder, quitarla al revocar.
-    const oldAttr = box.querySelector('.perm-attr');
-    if (oldAttr) oldAttr.remove();
-    if (on) box.insertAdjacentHTML('beforeend', grantAttrHTML(options[reportId]));
+  // Un informe que ve solo por una carpeta se muestra tildado en gris: hacer
+  // clic le da además la asignación directa (para protecciones o caducidad
+  // propias). Destildar la directa no le quita el acceso si la carpeta se lo da.
+  const viaOnly = cb.dataset.viaonly === '1';
+  const via = !!cb.dataset.via;
+  const on = viaOnly ? true : cb.checked;
+  cb.disabled = true;
+  try {
+    await grantReportToUser(userId, reportId, on, notifyChecked('perm-notify'));
+    // Badge de "usuarios con acceso" de la lista de informes: cuenta el acceso
+    // efectivo (directo o por carpeta).
+    const directBefore = viaOnly ? false : !on;
+    const delta = (on || via ? 1 : 0) - (directBefore || via ? 1 : 0);
+    reportAccessCounts[reportId] = Math.max(0, (reportAccessCounts[reportId] || 0) + delta);
+    await loadUserPermissions(true);
+  } catch (e) {
+    alert('No se pudo actualizar el acceso: ' + (e.message || e));
+    cb.disabled = false;
   }
+}
+
+/* ── Permisos por carpeta ──
+   userAccess/{uid}.folderIds + folderOptions[fid] (mismos campos que options
+   por informe). Con una carpeta asignada el usuario ve todos sus informes y los
+   de sus subcarpetas, también los que se suban después: la Cloud Function lo
+   expande en accesoEfectivo/{uid}. La usan la pestaña Permisos y el modal
+   "👥 Usuarios" de cada carpeta: las dos escriben exactamente lo mismo. */
+function folderName(id) { const f = folderById(id); return f ? f.name : '(carpeta borrada)'; }
+
+// Carpeta asignada más cercana a `folderId` (ella misma o una antecesora), entre
+// `assigned` (Set), o null. Es la misma precedencia que usa la Cloud Function.
+function nearestAssignedFolder(folderId, assigned) {
+  let cur = folderById(folderId);
+  const seen = new Set();
+  while (cur && !seen.has(cur.id)) {
+    seen.add(cur.id);
+    if (assigned.has(cur.id)) return cur.id;
+    cur = folderById(cur.parentId);
+  }
+  return null;
+}
+// Antecesora asignada (estricta) de una carpeta: "incluida por …".
+function assignedAncestor(folderId, assigned) {
+  const f = folderById(folderId);
+  return f ? nearestAssignedFolder(f.parentId, assigned) : null;
+}
+
+async function grantFolderToUser(userId, folderId, grant, notificar = true) {
+  const ref = db.collection('userAccess').doc(userId);
+  const FV = firebase.firestore.FieldValue;
+  if (grant) {
+    // Auditoría y aviso, igual que grantReportToUser.
+    const opts = Object.assign({}, DEFAULT_OPTS, {
+      grantedByUid: (currentUser && currentUser.uid) || null,
+      grantedByEmail: (currentUser && currentUser.email) || (currentUserData && currentUserData.email) || null,
+      grantedAt: new Date().toISOString(),
+      notificar: notificar !== false,
+    });
+    await ref.set({ folderIds: FV.arrayUnion(folderId), folderOptions: { [folderId]: opts } }, { merge: true });
+    if (notificar !== false) queueFolderNotice(userId, folderId);
+    return opts;
+  }
+  await ref.set({ folderIds: FV.arrayRemove(folderId), folderOptions: { [folderId]: FV.delete() } }, { merge: true });
+  dequeueFolderNotice(userId, folderId);
+  return null;
+}
+async function toggleFolderOpt(userId, folderId, key, val) {
+  await db.collection('userAccess').doc(userId)
+    .set({ folderOptions: { [folderId]: { [key]: val } } }, { merge: true });
+}
+async function writeFolderExpiry(userId, folderId, value) {
+  await db.collection('userAccess').doc(userId)
+    .set({ folderOptions: { [folderId]: { expiresAt: value ? value : firebase.firestore.FieldValue.delete() } } }, { merge: true });
+}
+
+// Protecciones + caducidad de una carpeta asignada (mismos controles que por
+// informe). `scope` es 'perm' (pestaña Permisos) o 'fmodal' (modal de la carpeta).
+function folderOptsHTML(uid, folderId, opts, scope) {
+  if (isAdminUid(uid)) return grantAttrHTML(opts);
+  const o = mergeOpts(opts);
+  const expVal = (opts && opts.expiresAt) || '';
+  return `${OPT_DEFS.map(d => `
+    <label class="perm-opt">
+      <input type="checkbox" ${o[d.key] ? 'checked' : ''} onchange="toggleFolderOpt('${uid}','${folderId}','${d.key}',this.checked)" />
+      <span>${d.icon} ${d.label}</span>
+    </label>`).join('')}
+    <div class="perm-opt" style="flex-direction:column;align-items:stretch;gap:.3rem;cursor:default">
+      <span>⏳ Caduca (opcional):</span>
+      <div style="display:flex;align-items:center;gap:.35rem;min-width:0">
+        <input type="date" value="${expVal}" style="flex:1;min-width:0;box-sizing:border-box;font-size:.72rem;padding:.25rem .3rem;border:1px solid var(--border);border-radius:3px"
+               onchange="setFolderExpiry('${uid}','${folderId}',this.value,'${scope}')" />
+        ${expVal ? `<button type="button" class="btn btn-outline btn-sm" style="flex:0 0 auto;padding:.15rem .45rem;font-size:.68rem" onclick="setFolderExpiry('${uid}','${folderId}','','${scope}')">✕</button>` : ''}
+      </div>
+    </div>
+    ${grantAttrHTML(opts)}`;
+}
+async function setFolderExpiry(uid, folderId, value, scope) {
+  try {
+    await writeFolderExpiry(uid, folderId, value);
+    if (scope === 'fmodal') refreshFolderUsersModal(uid, { expiresAt: value });
+    else loadUserPermissions(true);
+  } catch (e) { alert('No se pudo guardar la caducidad: ' + (e.message || e)); }
 }
 
 async function toggleOpt(userId, reportId, key, val) {
@@ -3821,49 +4147,67 @@ function clearExpiry(userId, reportId, btn) {
 // tiene asignados, con la misma navegación por carpetas que ve un cliente.
 let _userReportsCont = 'user-reports-container';
 const userIsAdmin = () => !!(currentUserData && currentUserData.role === 'admin');
+let _accesoUnsub = null;          // deja de escuchar accesoEfectivo/{uid}
+let _myDirectIds = new Set();     // userAccess/{uid}.reportIds (C6: reintentos)
+function stopAccessListener() { if (_accesoUnsub) { _accesoUnsub(); _accesoUnsub = null; } }
+
+// Lee el acceso efectivo del usuario (accesoEfectivo/{uid}: informes directos +
+// los de sus carpetas, sus opciones y las carpetas que navega) y se queda
+// escuchando: un informe subido a una carpeta asignada aparece sin recargar.
+// El cliente ya no lee la colección folders (la regla no se lo permite).
 async function loadUserReports(containerId = 'user-reports-container') {
   _userReportsCont = containerId;
   const cont = el(containerId);
-  const accessSnap = await db.collection('userAccess').doc(currentUser.uid).get();
-  const data = accessSnap.exists ? accessSnap.data() : {};
-  const ids = data.reportIds || [];
-  myAccessOptions = data.options || {};
-  await loadFolders();   // el cliente también lee las carpetas para poder navegar
-  if (!ids.length) {
-    _userReports = []; _userVisibleFolderIds = new Set(); _userFolderId = null;
-    cont.innerHTML = userIsAdmin()
-      ? emptyHTML('📭', `No tenés informes asignados.<br><a href="#" onclick="goToUserPerms('${currentUser.uid}');return false">Asignátelos en la pestaña Permisos</a> para tenerlos a mano acá.`)
-      : emptyHTML('📭', 'No tenés informes asignados aún.<br>Contactá al administrador.');
+  stopAccessListener();
+  if (cont) cont.innerHTML = '<div class="loading">Cargando informes...</div>';
+  let ua = {};
+  try {
+    const accessSnap = await db.collection('userAccess').doc(currentUser.uid).get();
+    ua = accessSnap.exists ? accessSnap.data() : {};
+  } catch (e) { ua = {}; }
+  _myDirectIds = new Set(ua.reportIds || []);
+  let first = true;
+  _accesoUnsub = db.collection('accesoEfectivo').doc(currentUser.uid).onSnapshot(
+    snap => {
+      applyEffectiveAccess(snap.exists ? snap.data() : null, ua, first);
+      first = false;
+    },
+    err => { const c = el(_userReportsCont); if (c) c.innerHTML = emptyHTML('⚠️', 'No se pudieron cargar tus informes: ' + esc(err.message || String(err))); });
+}
+
+function showNoReports(cont) {
+  cont.innerHTML = userIsAdmin()
+    ? emptyHTML('📭', `No tenés informes asignados.<br><a href="#" onclick="goToUserPerms('${currentUser.uid}');return false">Asignátelos en la pestaña Permisos</a> para tenerlos a mano acá.`)
+    : emptyHTML('📭', 'No tenés informes asignados aún.<br>Contactá al administrador.');
+}
+
+async function applyEffectiveAccess(acceso, ua, first) {
+  const cont = el(_userReportsCont); if (!cont) return;
+  if (!acceso) {
+    // Todavía no existe (usuario nuevo con el recálculo en curso): se espera al
+    // onSnapshot. Si no tiene nada asignado, no hay nada que esperar.
+    _userReports = []; _navFolders = new Map(); _userVisibleFolderIds = new Set();
+    if (!(ua.reportIds || []).length && !(ua.folderIds || []).length) showNoReports(cont);
+    else cont.innerHTML = '<div class="loading">Preparando tus informes…</div>';
     return;
   }
-  const reports = await Promise.all(
-    // Cada get por separado: un id viejo o sin permiso (las reglas niegan) no
-    // rompe la lista entera.
-    ids.map(async id => {
-      try { const d = await db.collection('reports').doc(id).get(); return d.exists ? {id,...d.data()} : null; }
-      catch (e) { return null; }
-    })
-  ).then(rs => rs.filter(Boolean));
-  // Si el folderId apunta a una carpeta inexistente (p. ej. borrada), lo tratamos como raíz.
-  reports.forEach(r => { if (r.folderId && !folderById(r.folderId)) r.folderId = null; });
+  myAccessOptions = acceso.opciones || {};
+  _navFolders = new Map(Object.entries(acceso.carpetas || {}).map(([id, f]) => [id, { id, ...f }]));
+  const ids = acceso.reportIds || [];
+  if (!ids.length) { _userReports = []; _userVisibleFolderIds = new Set(); _userFolderId = null; showNoReports(cont); return; }
+  // Cada get por separado: un id viejo o sin permiso (las reglas niegan) no
+  // rompe la lista entera. Se releen en cada cambio: si un informe se movió,
+  // su folderId también cambió.
+  const reports = await Promise.all(ids.map(async id => {
+    try { const d = await db.collection('reports').doc(id).get(); return d.exists ? { id, ...d.data() } : null; }
+    catch (e) { return null; }
+  })).then(rs => rs.filter(Boolean));
+  if (el(_userReportsCont) !== cont) return;   // cambió la vista mientras se leía
   _userReports = reports;
-  // Carpetas navegables por el cliente = las que están en el camino hacia algún
-  // informe asignado Y están marcadas como visibles para clientes. Las carpetas
-  // ocultas (clientVisible === false) se "saltean": su contenido se muestra en la
-  // carpeta visible más cercana hacia arriba (o en la raíz). Esto es recursivo.
-  const vis = new Set();
-  reports.forEach(r => {
-    let fid = r.folderId || null;
-    const seen = new Set();
-    while (fid && !seen.has(fid)) {
-      seen.add(fid);
-      const f = folderById(fid);
-      if (f && isClientVisibleFolder(f)) vis.add(fid);   // solo carpetas visibles
-      fid = f ? (f.parentId || null) : null;
-    }
-  });
-  _userVisibleFolderIds = vis;
-  _userFolderId = null;
+  // Carpetas navegables: las visibles de su acceso efectivo. Las ocultas no se
+  // ven: su contenido sube a la visible más cercana, sin pasar de una raíz.
+  _userVisibleFolderIds = new Set([..._navFolders.values()].filter(f => isClientVisibleFolder(f)).map(f => f.id));
+  if (first || !_navFolders.has(_userFolderId)) _userFolderId = null;
   if (!reports.length) { cont.innerHTML = emptyHTML('📭', 'No hay informes disponibles.'); return; }
   renderUserLevel();
 }
@@ -3873,7 +4217,7 @@ async function loadUserReports(containerId = 'user-reports-container') {
 // cuentan también los que provienen de subcarpetas ocultas promovidas a este nivel).
 function countAccessibleInFolder(folderId) {
   const subs = [..._userVisibleFolderIds]
-    .map(id => folderById(id))
+    .map(id => navFolder(id))
     .filter(f => f && nearestVisibleFolderFrom(f.parentId || null) === folderId).length;
   const reps = _userReports
     .filter(r => nearestVisibleFolderFrom(r.folderId || null) === folderId).length;
@@ -3882,10 +4226,11 @@ function countAccessibleInFolder(folderId) {
 
 function userBreadcrumbHTML() {
   const chain = [];
-  let cur = _userFolderId ? folderById(_userFolderId) : null;
+  let cur = navFolder(_userFolderId);
   const seen = new Set();
   // Solo carpetas visibles: las ocultas no son navegables ni aparecen en la ruta.
-  while (cur && !seen.has(cur.id)) { seen.add(cur.id); if (isClientVisibleFolder(cur)) chain.unshift(cur); cur = cur.parentId ? folderById(cur.parentId) : null; }
+  // La cadena termina en una raíz del usuario: nunca muestra sus antecesoras.
+  while (cur && !seen.has(cur.id)) { seen.add(cur.id); if (isClientVisibleFolder(cur)) chain.unshift(cur); cur = navFolder(cur.parentId); }
   let html = `<div class="breadcrumb"><a onclick="enterFolder(null)">🏠 Inicio</a>`;
   chain.forEach((f, i) => {
     html += `<span class="sep">›</span>`;
@@ -3904,7 +4249,7 @@ function renderUserLevel() {
   // Subcarpetas visibles cuyo "padre visible más cercano" es este nivel (las que
   // cuelgan de carpetas ocultas se promueven hasta acá).
   const subfolders = [..._userVisibleFolderIds]
-    .map(id => folderById(id))
+    .map(id => navFolder(id))
     .filter(f => f && nearestVisibleFolderFrom(f.parentId || null) === here)
     .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'es'));
   // Informes cuyo "padre visible más cercano" es este nivel (incluye los que
@@ -3967,12 +4312,28 @@ async function openUserReport(storagePath, name, reportId) {
   }
   showLoadingOverlay(name);
   try {
-    const url = await storage.ref(storagePath).getDownloadURL();
+    const url = await reportDownloadURL(storagePath, reportId);
     await openViewer(url, name, opts, currentUser && currentUser.email, reportId);
   } catch (err) {
     alert('Error al cargar el informe: ' + (err.message || err));
   } finally {
     hideLoadingOverlay();
+  }
+}
+
+// C6: la regla de Storage lee accesoEfectivo, que la Cloud Function recalcula
+// 1–3 s después de una asignación. Si el informe sí está asignado
+// (userAccess.reportIds) pero Storage todavía no lo deja leer, se reintenta
+// 3 veces (1, 2 y 4 s) antes de mostrar el error.
+async function reportDownloadURL(storagePath, reportId) {
+  const waits = [1000, 2000, 4000];
+  for (let i = 0; ; i++) {
+    try { return await storage.ref(storagePath).getDownloadURL(); }
+    catch (e) {
+      if (!(e && e.code === 'storage/unauthorized' && reportId && _myDirectIds.has(reportId)) || i >= waits.length) throw e;
+      setLoadingTitle('Preparando el acceso…');
+      await new Promise(res => setTimeout(res, waits[i]));
+    }
   }
 }
 
@@ -4169,6 +4530,10 @@ function showLoadingOverlay(fileName) {
   return ov;
 }
 
+function setLoadingTitle(text) {
+  const h = document.querySelector('#loading-overlay h3'); if (h) h.textContent = text;
+}
+
 function hideLoadingOverlay() {
   const ov = document.getElementById('loading-overlay');
   if (!ov) return;
@@ -4207,8 +4572,8 @@ let _cifradoMod = null;
 function cifrado() { return _cifradoMod || (_cifradoMod = import('/cifrado.js')); }
 
 // Bytes actuales (sin caché) de un archivo de reports/ por su ruta de Storage.
-async function reportBytes(storagePath) {
-  const url = await storage.ref(storagePath).getDownloadURL();
+async function reportBytes(storagePath, reportId) {
+  const url = await reportDownloadURL(storagePath, reportId);
   return new Uint8Array(await fetchBytes(freshUrl(url)));
 }
 
@@ -4265,7 +4630,7 @@ function closeKeyModal() { const m = el('key-modal'); if (m) m.remove(); }
 async function decryptReport(rep) {
   showLoadingOverlay(rep.name);
   let data;
-  try { data = await reportBytes(rep.storagePath); }
+  try { data = await reportBytes(rep.storagePath, rep.id); }
   finally { hideLoadingOverlay(); }
   const C = await cifrado();
   const out = (r) => ({ bytes: r.bytes, name: rep.name, gpgBytes: data });
@@ -5010,6 +5375,22 @@ function renderDashboardAnalytics() {
 let _mailInfo = null;   // respuesta de infoCorreo: { catalogo, enviados24h, cupoDiario, disponible, … }
 let _mailCfg  = {};     // doc config/correos
 let _tplFocus = {};     // { clave: id del último campo (asunto/cuerpo) con foco }
+
+async function recalcularAccesosUI() {
+  const btn = el('recalc-btn'); if (btn) btn.disabled = true;
+  showAlert('recalc-result', 'success', '⏳ Recalculando accesos…');
+  try {
+    const r = await callFn('recalcularAccesos', {});
+    const dif = r.diferencias || [];
+    showAlert('recalc-result', dif.length ? 'error' : 'success',
+      `${dif.length ? '⚠️' : '✅'} ${r.total} usuarios revisados · ${r.cambiados} corregidos · ` +
+      (dif.length ? `<b>${dif.length} con diferencias</b>: ${dif.slice(0, 10).map(d => esc((allUsers.find(u => u.id === d.uid) || {}).email || d.uid)).join(', ')}`
+                  : '<b>0 diferencias</b>.'));
+    refreshAccessCountsSoon();
+  } catch (e) {
+    showAlert('recalc-result', 'error', '❌ No se pudo recalcular: ' + esc(fnErrorMsg(e)));
+  } finally { if (btn) btn.disabled = false; }
+}
 
 async function loadMailConfig() {
   const gen = el('cfg-mail-general'), tpl = el('cfg-mail-templates');
