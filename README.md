@@ -252,6 +252,8 @@ En **Panel Admin → Permisos**, dentro de cada informe asignado a un usuario, s
 - ⬇️ **Bloquear descarga** — oculta el botón de abrir/descargar.
 - 🖱️ **Bloquear clic derecho / selección**.
 
+Cada asignación nueva (de un informe o de una carpeta) arranca con **marca de agua** y **descarga bloqueada** (`DEFAULT_OPTS` en `index.html`). Para dejar con la descarga bloqueada las asignaciones que ya existían, ver `scripts/bloquear_descargas.py`.
+
 > ⚠️ **Importante:** estas protecciones son **disuasivas**, no infalibles. En una web **no se puede impedir una captura de pantalla** (ni una foto con el celular), y un usuario técnico puede sortear los bloqueos. La protección más efectiva es la **marca de agua**, que deja rastro de quién visualizó el documento.
 
 ---
