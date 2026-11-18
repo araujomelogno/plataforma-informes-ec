@@ -5810,7 +5810,11 @@ function guessContentType(name) {
 }
 
 /* ── PROTECCIONES: opciones por usuario+informe ── */
-const DEFAULT_OPTS = { watermark: true, noPrint: false, noDownload: false, noCopy: false };
+// Valores con los que arranca cada asignación nueva (de un informe o de una
+// carpeta, desde Permisos o desde los modales "Usuarios"): marca de agua y
+// descarga bloqueada. El admin las cambia después por asignación. mergeOpts
+// usa estos mismos valores para lo que una asignación no tenga guardado.
+const DEFAULT_OPTS = { watermark: true, noPrint: false, noDownload: true, noCopy: false };
 const OPT_DEFS = [
   { key: 'watermark',  icon: '💧', label: 'Marca de agua (email · fecha)' },
   { key: 'noPrint',    icon: '🖨️', label: 'Bloquear impresión' },
